@@ -37,6 +37,53 @@ pip install -e .
 
 Requires Python **3.11+**.
 
+## Portable — run on Windows 11 (no install)
+
+Because AIO has **zero runtime dependencies** (pure Python standard library), it
+runs straight from the folder — no `pip install`, no virtualenv. You only need
+**Python 3.11+** on the machine.
+
+1. Copy the project folder anywhere (USB stick, Desktop, …).
+2. Double-click **`run.bat`**.
+
+It launches the local web dashboard and opens your browser at
+**http://localhost:8765**. `Ctrl+C` (or closing the window) stops it.
+
+- PowerShell alternative: right-click **`run.ps1`** → *Run with PowerShell*
+  (or `powershell -ExecutionPolicy Bypass -File .\run.ps1`).
+- macOS/Linux: `./run.sh`
+- Pass extra options through the launcher, e.g. a different port, model or
+  working directory:
+
+  ```bat
+  run.bat --port 9000 -p ollama -C C:\path\to\your\project
+  ```
+
+Under the hood the launcher just sets `PYTHONPATH=src` and runs
+`python -m aio --web --open`, so nothing is written outside the folder.
+
+### Fully self-contained (no system Python at all)
+
+To ship a bundle that includes its own Python (so it runs on a clean
+Windows 11 machine with nothing installed):
+
+1. Double-click **`setup-embedded.bat`** once (needs internet). It downloads the
+   official Windows *embeddable* Python into a local **`python\`** folder and
+   wires it to the project's `src\`.
+2. From then on, **`run.bat`** automatically uses `python\` — no system Python
+   required. Copy the whole folder anywhere (USB, another PC) and it just runs,
+   even offline.
+
+```bat
+setup-embedded.bat                 :: one-time, downloads python\
+setup-embedded.bat 3.12.7 amd64    :: pin a specific version / arch
+run.bat                            :: uses the bundled python\
+```
+
+`run.bat` resolves Python in this order: bundled **`python\`** → the `py`
+launcher → `python` on `PATH`. The `python\` folder is git-ignored (it's a
+generated runtime, not source).
+
 ## Quick start
 
 ```bash
@@ -89,13 +136,16 @@ aio --web --port 8765
 A single-page dashboard (served by the Python stdlib — no JS build step, no
 extra dependencies) that drives the same agent:
 
-- chat with the agent and watch each step stream in: assistant messages, tool
-  calls, tool results, and **colour-coded diffs** for every file edit
+- chat with the agent and watch each step **stream in live (Server-Sent
+  Events)**: assistant messages, tool calls, tool results, and **colour-coded
+  diffs** appear as they happen
 - sidebar listing the available tools and the working directory
 - switch **provider/model** on the fly and clear the conversation
 - a **tools panel** with four tabs that work independently of the model:
   - **Editor** — an in-browser IDE: file tree, **multi-file tabs** (with
-    unsaved-change indicators), and a code editor with **syntax highlighting**
+    unsaved-change indicators), **line numbers**, in-editor **find & replace**
+    (`Ctrl+F`, next/prev + match count, Replace / Replace-all), and
+    **syntax highlighting**
     (Python, JS/TS, JSON, HTML, CSS, shell, Markdown — all zero-dependency),
     plus Save / Revert / `Ctrl+S` / `Tab`-indent, sandboxed to the working
     directory. It auto-refreshes open files when the agent edits them.
@@ -105,8 +155,9 @@ extra dependencies) that drives the same agent:
     commit box, with colour-coded diff output
   - **Web server** — start/stop a static file server that serves the working
     directory (handy for previewing built sites), with a clickable link
-- small JSON API: `GET /api/info`, `POST /api/chat`, `POST /api/reset`,
-  `POST /api/config`, `POST /api/exec`, `POST /api/git`, `POST /api/server`,
+- small JSON API: `GET /api/info`, `POST /api/chat`,
+  `GET /api/chat/stream` (SSE), `POST /api/reset`, `POST /api/config`,
+  `POST /api/exec`, `POST /api/git`, `POST /api/server`,
   `POST /api/fs/{tree,read,write}`
 
 > In web mode tool calls are **auto-approved** (there is no terminal to prompt),

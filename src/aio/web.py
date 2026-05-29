@@ -36,36 +36,47 @@ class EventUI:
 
     def __init__(self) -> None:
         self.events: list[dict[str, Any]] = []
+        # Optional live callback: when set, each event is delivered immediately
+        # (used for Server-Sent Events streaming) in addition to being stored.
+        self.sink = None
 
     def drain(self) -> list[dict[str, Any]]:
         out = self.events
         self.events = []
         return out
 
+    def _emit(self, event: dict[str, Any]) -> None:
+        self.events.append(event)
+        if self.sink is not None:
+            try:
+                self.sink(event)
+            except Exception:  # pragma: no cover - client disconnect, etc.
+                pass
+
     # -- methods used by the agent / tools --------------------------------
     def banner(self, *_a, **_k) -> None:  # no-op in web mode
         pass
 
     def info(self, text: str) -> None:
-        self.events.append({"type": "info", "text": text})
+        self._emit({"type": "info", "text": text})
 
     def warn(self, text: str) -> None:
-        self.events.append({"type": "warn", "text": text})
+        self._emit({"type": "warn", "text": text})
 
     def error(self, text: str) -> None:
-        self.events.append({"type": "error", "text": text})
+        self._emit({"type": "error", "text": text})
 
     def thinking(self, text: str = "thinking…") -> None:
-        self.events.append({"type": "thinking", "text": text})
+        self._emit({"type": "thinking", "text": text})
 
     def assistant(self, text: str) -> None:
-        self.events.append({"type": "assistant", "text": text})
+        self._emit({"type": "assistant", "text": text})
 
     def tool_call(self, name: str, args: dict) -> None:
-        self.events.append({"type": "tool_call", "name": name, "args": args})
+        self._emit({"type": "tool_call", "name": name, "args": args})
 
     def tool_result(self, text: str, error: bool = False) -> None:
-        self.events.append({"type": "tool_result", "text": text, "error": error})
+        self._emit({"type": "tool_result", "text": text, "error": error})
 
     def show_diff(self, old: str, new: str, path: str) -> None:
         if old == new:
@@ -76,7 +87,7 @@ class EventUI:
                 fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="",
             )
         )
-        self.events.append({"type": "diff", "path": path, "diff": diff})
+        self._emit({"type": "diff", "path": path, "diff": diff})
 
     def confirm(self, name: str, args: dict) -> str:
         # No interactive prompt available over HTTP; auto-approve.
@@ -135,6 +146,24 @@ class AgentService:
                 self.ui.error(str(exc))
                 final = ""
             return {"events": self.ui.drain(), "final": final}
+
+    def chat_stream(self, message: str, emit) -> None:
+        """Run a turn, delivering each event to ``emit`` as it happens.
+
+        ``emit`` receives every agent/tool event live and a final
+        ``{"type": "done", "final": ...}`` event when the turn completes.
+        """
+        with self._lock:
+            self.ui.drain()
+            self.ui.sink = emit
+            try:
+                final = self.agent.run(message)
+            except ProviderError as exc:
+                emit({"type": "error", "text": str(exc)})
+                final = ""
+            finally:
+                self.ui.sink = None
+            emit({"type": "done", "final": final})
 
     def reset(self) -> dict[str, Any]:
         with self._lock:
@@ -304,8 +333,30 @@ def _make_handler(service: AgentService):
                 self._send(200, INDEX_HTML.encode("utf-8"), "text/html; charset=utf-8")
             elif self.path == "/api/info":
                 self._json(200, service.info())
+            elif self.path.startswith("/api/chat/stream"):
+                self._chat_stream()
             else:
                 self._json(404, {"error": "not found"})
+
+        def _chat_stream(self):
+            from urllib.parse import parse_qs, urlparse
+
+            qs = parse_qs(urlparse(self.path).query)
+            message = (qs.get("message") or [""])[0]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+
+            def emit(event):
+                self.wfile.write(f"data: {json.dumps(event)}\n\n".encode("utf-8"))
+                self.wfile.flush()
+
+            try:
+                service.chat_stream(message, emit)
+            except (BrokenPipeError, ConnectionResetError):  # pragma: no cover
+                pass
 
         def do_POST(self):  # noqa: N802
             try:
@@ -348,13 +399,23 @@ def _make_handler(service: AgentService):
     return Handler
 
 
-def serve(config: Config, host: str = "127.0.0.1", port: int = 8765) -> None:
+def serve(
+    config: Config, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = False
+) -> None:
     service = AgentService(config)
     httpd = ThreadingHTTPServer((host, port), _make_handler(service))
-    url = f"http://{host}:{port}"
+    # When bound to 0.0.0.0, the browsable URL is localhost.
+    browse_host = "localhost" if host in ("0.0.0.0", "") else host
+    url = f"http://{browse_host}:{port}"
     print(f"AIO web dashboard running at {url}")
     print(f"provider={config.provider}  model={config.active.model}  workdir={config.workdir}")
     print("tool calls are auto-approved in web mode. Ctrl+C to stop.")
+    if open_browser:
+        import threading
+        import webbrowser
+
+        # Open shortly after the server starts listening.
+        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -435,13 +496,25 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .edtabs .etab .x{color:var(--muted);padding:0 2px} .edtabs .etab .x:hover{color:var(--red)}
   .edtabs .etab.dirty .name::after{content:" •";color:var(--yellow)}
   .editor-wrap{position:relative;flex:1;min-height:280px;border:1px solid var(--border);
-        border-radius:0 6px 6px 6px;overflow:hidden;background:#010409}
-  .editor-wrap pre.hl,.editor-wrap textarea{margin:0;padding:10px;border:0;box-sizing:border-box;
+        border-radius:0 6px 6px 6px;overflow:hidden;background:#010409;display:flex}
+  .gutter{flex:0 0 auto;min-width:34px;overflow:hidden;background:#0b0f14;border-right:1px solid var(--border);
+        color:#6e7681;text-align:right}
+  .gutter .nums{padding:10px 6px 10px 8px;will-change:transform;
+        font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.5;white-space:pre}
+  .code-area{position:relative;flex:1;overflow:hidden}
+  .code-area pre.hl,.code-area textarea{margin:0;padding:10px;border:0;box-sizing:border-box;
         font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.5;tab-size:4;
         white-space:pre;word-wrap:normal;position:absolute;inset:0;width:100%;height:100%;overflow:auto}
-  .editor-wrap pre.hl{pointer-events:none;color:#c9d1d9;z-index:0}
-  .editor-wrap pre.hl code{font:inherit;white-space:pre}
-  .editor-wrap textarea{background:transparent;color:transparent;caret-color:#e6edf3;resize:none;z-index:1;outline:none}
+  .code-area pre.hl{pointer-events:none;color:#c9d1d9;z-index:0}
+  .code-area pre.hl code{font:inherit;white-space:pre}
+  .code-area textarea{background:transparent;color:transparent;caret-color:#e6edf3;resize:none;z-index:1;outline:none}
+  .findbar{position:absolute;top:6px;right:14px;z-index:5;display:none;flex-direction:column;gap:4px;
+        background:#161b22;border:1px solid var(--border);border-radius:6px;padding:6px}
+  .findbar.on{display:flex}
+  .findbar .frow{display:flex;gap:4px;align-items:center}
+  .findbar input{padding:3px 6px;font-size:12px;width:130px}
+  .findbar .cnt{color:var(--muted);min-width:46px;text-align:center;font-size:12px}
+  .findbar button{padding:2px 7px}
   /* syntax tokens */
   .t-comment{color:#8b949e;font-style:italic} .t-string{color:#a5d6ff} .t-keyword{color:#ff7b72}
   .t-number{color:#79c0ff} .t-tag{color:#7ee787} .t-atrule{color:#d2a8ff}
@@ -491,8 +564,25 @@ INDEX_HTML = r"""<!DOCTYPE html>
       </div>
       <div id="edTabs" class="edtabs"></div>
       <div class="editor-wrap">
-        <pre class="hl" id="edHLpre"><code id="edHL"></code></pre>
-        <textarea id="edText" spellcheck="false" wrap="off" placeholder="select a file to edit…"></textarea>
+        <div class="gutter" id="edGutter"><div class="nums" id="edNums">1</div></div>
+        <div class="code-area">
+          <pre class="hl" id="edHLpre"><code id="edHL"></code></pre>
+          <textarea id="edText" spellcheck="false" wrap="off" placeholder="select a file to edit…"></textarea>
+        </div>
+        <div class="findbar" id="edFindBar">
+          <div class="frow">
+            <input id="edFindInput" placeholder="find" spellcheck="false"/>
+            <span class="cnt" id="edFindCnt">0/0</span>
+            <button id="edFindPrev" title="previous (Shift+Enter)">↑</button>
+            <button id="edFindNext" title="next (Enter)">↓</button>
+            <button id="edFindClose" title="close (Esc)">×</button>
+          </div>
+          <div class="frow">
+            <input id="edReplaceInput" placeholder="replace" spellcheck="false"/>
+            <button id="edReplaceOne" title="replace current match">Replace</button>
+            <button id="edReplaceAll" title="replace all matches">All</button>
+          </div>
+        </div>
       </div>
       <div class="row">
         <span id="edStatus" class="muted" style="flex:1;align-self:center"></span>
@@ -591,19 +681,25 @@ async function loadInfo(){
     document.getElementById('tools').appendChild(x);});
 }
 
-async function sendMsg(){
+function sendMsg(){
   const text=input.value.trim(); if(!text) return;
   addMsg('user', text); input.value=''; send.disabled=true;
   const think=addThinking();
-  try{
-    const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({message:text})});
-    const d=await r.json(); think.remove();
-    (d.events||[]).forEach(addEvent);
-    if(d.error){ addEvent({type:'error',text:d.error}); }
-    if((d.events||[]).some(e=>e.type==='diff')){ loadTree(); if(window.__edRefresh) window.__edRefresh(); }
-  }catch(e){ think.remove(); addEvent({type:'error',text:String(e)}); }
-  send.disabled=false; input.focus();
+  let sawDiff=false, gotFirst=false;
+  // Stream events live via Server-Sent Events.
+  const es=new EventSource('/api/chat/stream?message='+encodeURIComponent(text));
+  const finish=()=>{ es.close(); send.disabled=false; input.focus();
+    if(sawDiff){ loadTree(); if(window.__edRefresh) window.__edRefresh(); } };
+  es.onmessage=(e)=>{
+    if(!gotFirst){ think.remove(); gotFirst=true; }
+    let ev; try{ ev=JSON.parse(e.data); }catch(_){ return; }
+    if(ev.type==='done'){ finish(); return; }
+    if(ev.type==='diff') sawDiff=true;
+    if(ev.type!=='thinking') addEvent(ev);
+  };
+  es.onerror=()=>{ if(!gotFirst) think.remove();
+    if(send.disabled){ addEvent({type:'error',text:'connection lost'}); }
+    finish(); };
 }
 
 send.onclick=sendMsg;
@@ -686,7 +782,9 @@ document.getElementById('srvStatus').onclick=()=>srv('status');
 // ---- Editor (in-browser IDE) : syntax highlighting + multi-file tabs ----
 const edFile=document.getElementById('edFile'), edText=document.getElementById('edText'),
       edStatus=document.getElementById('edStatus'), edHL=document.getElementById('edHL'),
-      edHLpre=document.getElementById('edHLpre'), edTabs=document.getElementById('edTabs');
+      edHLpre=document.getElementById('edHLpre'), edTabs=document.getElementById('edTabs'),
+      edNums=document.getElementById('edNums');
+const LINE_H=18.75; // 12.5px font * 1.5 line-height
 
 // --- tiny zero-dependency syntax highlighter ---
 function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
@@ -726,9 +824,16 @@ function highlight(code,lang){
 // --- multi-file tab state ---
 let tabs=[], active=-1;
 function activeTab(){return active>=0?tabs[active]:null;}
+function updateGutter(){
+  const n=(edText.value.match(/\n/g)||[]).length+1;
+  let s=''; for(let i=1;i<=n;i++) s+=i+'\n';
+  edNums.textContent=s;
+  edNums.style.transform='translateY('+(-edText.scrollTop)+'px)';
+}
 function render(){
   edHL.innerHTML=highlight(edText.value, active>=0?langFor(tabs[active].path):null);
   edHLpre.scrollTop=edText.scrollTop; edHLpre.scrollLeft=edText.scrollLeft;
+  updateGutter();
 }
 function renderTabs(){
   edTabs.innerHTML='';
@@ -788,12 +893,76 @@ document.getElementById('edRevert').onclick=()=>{const t=activeTab();if(!t)retur
   edStatus.innerHTML='<span class="muted">reverted '+t.path+'</span>';};
 edText.addEventListener('input',()=>{const t=activeTab();if(t){t.content=edText.value;
   const d=t.content!==t.clean; if(d!==t.dirty){t.dirty=d;renderTabs();}} render();});
-edText.addEventListener('scroll',()=>{edHLpre.scrollTop=edText.scrollTop;edHLpre.scrollLeft=edText.scrollLeft;});
+edText.addEventListener('scroll',()=>{edHLpre.scrollTop=edText.scrollTop;edHLpre.scrollLeft=edText.scrollLeft;
+  edNums.style.transform='translateY('+(-edText.scrollTop)+'px)';});
 edText.addEventListener('keydown',e=>{
   if((e.ctrlKey||e.metaKey)&&e.key==='s'){e.preventDefault();saveActive();}
+  if((e.ctrlKey||e.metaKey)&&(e.key==='f'||e.key==='F')){e.preventDefault();openFind();}
   if(e.key==='Tab'){e.preventDefault();const s=edText.selectionStart,en=edText.selectionEnd;
     edText.value=edText.value.slice(0,s)+'    '+edText.value.slice(en);
     edText.selectionStart=edText.selectionEnd=s+4;edText.dispatchEvent(new Event('input'));}
+});
+
+// ---- find within the editor (Ctrl/Cmd+F) ----
+const edFindBar=document.getElementById('edFindBar'), edFindInput=document.getElementById('edFindInput'),
+      edFindCnt=document.getElementById('edFindCnt');
+let findMatches=[], findIdx=-1;
+function openFind(){
+  edFindBar.classList.add('on');
+  const sel=edText.value.substring(edText.selectionStart,edText.selectionEnd);
+  if(sel && sel.length<60 && !sel.includes('\n')) edFindInput.value=sel;
+  edFindInput.focus(); edFindInput.select(); runFind();
+}
+function closeFind(){ edFindBar.classList.remove('on'); edText.focus(); }
+function runFind(){
+  const q=edFindInput.value; findMatches=[]; findIdx=-1;
+  if(q){ const hay=edText.value.toLowerCase(), needle=q.toLowerCase();
+    let i=hay.indexOf(needle);
+    while(i!==-1){ findMatches.push(i); i=hay.indexOf(needle, i+Math.max(1,needle.length)); } }
+  if(findMatches.length){ findIdx=0; jumpFind(); }
+  else { edFindCnt.textContent=q?'0/0':'0/0'; }
+}
+function jumpFind(){
+  if(findIdx<0||!findMatches.length) return;
+  const start=findMatches[findIdx], end=start+edFindInput.value.length;
+  edText.setSelectionRange(start,end); // visible (greyed) without stealing focus from the find box
+  const line=(edText.value.slice(0,start).match(/\n/g)||[]).length;
+  edText.scrollTop=Math.max(0, line*LINE_H - edText.clientHeight/2);
+  edNums.style.transform='translateY('+(-edText.scrollTop)+'px)';
+  edHLpre.scrollTop=edText.scrollTop;
+  edFindCnt.textContent=(findIdx+1)+'/'+findMatches.length;
+}
+function nextFind(d){ if(!findMatches.length)return; findIdx=(findIdx+d+findMatches.length)%findMatches.length; jumpFind(); }
+edFindInput.addEventListener('input', runFind);
+edFindInput.addEventListener('keydown', e=>{
+  if(e.key==='Enter'){ e.preventDefault(); nextFind(e.shiftKey?-1:1); }
+  if(e.key==='Escape'){ e.preventDefault(); closeFind(); }
+});
+document.getElementById('edFindNext').onclick=()=>nextFind(1);
+document.getElementById('edFindPrev').onclick=()=>nextFind(-1);
+document.getElementById('edFindClose').onclick=closeFind;
+
+// ---- replace ----
+const edReplaceInput=document.getElementById('edReplaceInput');
+function replaceOne(){
+  if(findIdx<0||!findMatches.length||!edFindInput.value)return;
+  const start=findMatches[findIdx], end=start+edFindInput.value.length;
+  edText.value=edText.value.slice(0,start)+edReplaceInput.value+edText.value.slice(end);
+  edText.dispatchEvent(new Event('input'));   // updates tab/dirty + re-highlight
+  runFind();                                  // recompute (jumps to first remaining)
+}
+function replaceAll(){
+  if(!edFindInput.value||!findMatches.length)return;
+  let v=edText.value; const flen=edFindInput.value.length, rep=edReplaceInput.value, n=findMatches.length;
+  for(let i=findMatches.length-1;i>=0;i--){const s=findMatches[i]; v=v.slice(0,s)+rep+v.slice(s+flen);}
+  edText.value=v; edText.dispatchEvent(new Event('input'));
+  runFind(); edFindCnt.textContent='replaced '+n;
+}
+document.getElementById('edReplaceOne').onclick=replaceOne;
+document.getElementById('edReplaceAll').onclick=replaceAll;
+edReplaceInput.addEventListener('keydown',e=>{
+  if(e.key==='Enter'){e.preventDefault();replaceOne();}
+  if(e.key==='Escape'){e.preventDefault();closeFind();}
 });
 // re-read open, unmodified files after the agent edits them on disk
 async function refreshOpen(){

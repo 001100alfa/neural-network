@@ -45,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--web", action="store_true", help="Launch the browser dashboard instead of the CLI.")
     p.add_argument("--host", default="127.0.0.1", help="Web dashboard host (default 127.0.0.1).")
     p.add_argument("--port", type=int, default=8765, help="Web dashboard port (default 8765).")
+    p.add_argument("--open", action="store_true", help="Open the dashboard in the default browser (with --web).")
     p.add_argument("--list-tools", action="store_true", help="List tools and exit.")
     p.add_argument("--version", action="version", version=f"aio {__version__}")
     return p
@@ -142,7 +143,25 @@ def repl(agent: Agent, config, ui: UI) -> int:
     return 0
 
 
+def _enable_windows_ansi() -> None:
+    """Enable ANSI escape processing on Windows 10/11 consoles."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        # STD_OUTPUT_HANDLE = -11; ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+        handle = kernel32.GetStdHandle(-11)
+        mode = ctypes.c_uint32()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            kernel32.SetConsoleMode(handle, mode.value | 0x0004)
+    except Exception:  # pragma: no cover - best effort, never fatal
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _enable_windows_ansi()
     args = build_parser().parse_args(argv)
 
     overrides = {}
@@ -178,7 +197,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.web:
         from .web import serve
 
-        serve(config, host=args.host, port=args.port)
+        serve(config, host=args.host, port=args.port, open_browser=args.open)
         return 0
 
     agent, mcp_servers = _make_agent(config, ui, no_mcp=args.no_mcp)

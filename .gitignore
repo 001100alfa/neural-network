@@ -13,6 +13,10 @@ dist/
 venv/
 env/
 
+# Bundled portable runtime created by setup-embedded.ps1
+/python/
+python-*-embed-*.zip
+
 # Local config / secrets
 .aio.toml
 *.local.toml
