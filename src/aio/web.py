@@ -435,13 +435,24 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .edtabs .etab .x{color:var(--muted);padding:0 2px} .edtabs .etab .x:hover{color:var(--red)}
   .edtabs .etab.dirty .name::after{content:" •";color:var(--yellow)}
   .editor-wrap{position:relative;flex:1;min-height:280px;border:1px solid var(--border);
-        border-radius:0 6px 6px 6px;overflow:hidden;background:#010409}
-  .editor-wrap pre.hl,.editor-wrap textarea{margin:0;padding:10px;border:0;box-sizing:border-box;
+        border-radius:0 6px 6px 6px;overflow:hidden;background:#010409;display:flex}
+  .gutter{flex:0 0 auto;min-width:34px;overflow:hidden;background:#0b0f14;border-right:1px solid var(--border);
+        color:#6e7681;text-align:right}
+  .gutter .nums{padding:10px 6px 10px 8px;will-change:transform;
+        font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.5;white-space:pre}
+  .code-area{position:relative;flex:1;overflow:hidden}
+  .code-area pre.hl,.code-area textarea{margin:0;padding:10px;border:0;box-sizing:border-box;
         font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.5;tab-size:4;
         white-space:pre;word-wrap:normal;position:absolute;inset:0;width:100%;height:100%;overflow:auto}
-  .editor-wrap pre.hl{pointer-events:none;color:#c9d1d9;z-index:0}
-  .editor-wrap pre.hl code{font:inherit;white-space:pre}
-  .editor-wrap textarea{background:transparent;color:transparent;caret-color:#e6edf3;resize:none;z-index:1;outline:none}
+  .code-area pre.hl{pointer-events:none;color:#c9d1d9;z-index:0}
+  .code-area pre.hl code{font:inherit;white-space:pre}
+  .code-area textarea{background:transparent;color:transparent;caret-color:#e6edf3;resize:none;z-index:1;outline:none}
+  .findbar{position:absolute;top:6px;right:14px;z-index:5;display:none;gap:4px;align-items:center;
+        background:#161b22;border:1px solid var(--border);border-radius:6px;padding:4px 6px}
+  .findbar.on{display:flex}
+  .findbar input{padding:3px 6px;font-size:12px;width:130px}
+  .findbar .cnt{color:var(--muted);min-width:46px;text-align:center;font-size:12px}
+  .findbar button{padding:2px 7px}
   /* syntax tokens */
   .t-comment{color:#8b949e;font-style:italic} .t-string{color:#a5d6ff} .t-keyword{color:#ff7b72}
   .t-number{color:#79c0ff} .t-tag{color:#7ee787} .t-atrule{color:#d2a8ff}
@@ -491,8 +502,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
       </div>
       <div id="edTabs" class="edtabs"></div>
       <div class="editor-wrap">
-        <pre class="hl" id="edHLpre"><code id="edHL"></code></pre>
-        <textarea id="edText" spellcheck="false" wrap="off" placeholder="select a file to edit…"></textarea>
+        <div class="gutter" id="edGutter"><div class="nums" id="edNums">1</div></div>
+        <div class="code-area">
+          <pre class="hl" id="edHLpre"><code id="edHL"></code></pre>
+          <textarea id="edText" spellcheck="false" wrap="off" placeholder="select a file to edit…"></textarea>
+        </div>
+        <div class="findbar" id="edFindBar">
+          <input id="edFindInput" placeholder="find" spellcheck="false"/>
+          <span class="cnt" id="edFindCnt">0/0</span>
+          <button id="edFindPrev" title="previous (Shift+Enter)">↑</button>
+          <button id="edFindNext" title="next (Enter)">↓</button>
+          <button id="edFindClose" title="close (Esc)">×</button>
+        </div>
       </div>
       <div class="row">
         <span id="edStatus" class="muted" style="flex:1;align-self:center"></span>
@@ -686,7 +707,9 @@ document.getElementById('srvStatus').onclick=()=>srv('status');
 // ---- Editor (in-browser IDE) : syntax highlighting + multi-file tabs ----
 const edFile=document.getElementById('edFile'), edText=document.getElementById('edText'),
       edStatus=document.getElementById('edStatus'), edHL=document.getElementById('edHL'),
-      edHLpre=document.getElementById('edHLpre'), edTabs=document.getElementById('edTabs');
+      edHLpre=document.getElementById('edHLpre'), edTabs=document.getElementById('edTabs'),
+      edNums=document.getElementById('edNums');
+const LINE_H=18.75; // 12.5px font * 1.5 line-height
 
 // --- tiny zero-dependency syntax highlighter ---
 function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
@@ -726,9 +749,16 @@ function highlight(code,lang){
 // --- multi-file tab state ---
 let tabs=[], active=-1;
 function activeTab(){return active>=0?tabs[active]:null;}
+function updateGutter(){
+  const n=(edText.value.match(/\n/g)||[]).length+1;
+  let s=''; for(let i=1;i<=n;i++) s+=i+'\n';
+  edNums.textContent=s;
+  edNums.style.transform='translateY('+(-edText.scrollTop)+'px)';
+}
 function render(){
   edHL.innerHTML=highlight(edText.value, active>=0?langFor(tabs[active].path):null);
   edHLpre.scrollTop=edText.scrollTop; edHLpre.scrollLeft=edText.scrollLeft;
+  updateGutter();
 }
 function renderTabs(){
   edTabs.innerHTML='';
@@ -788,13 +818,54 @@ document.getElementById('edRevert').onclick=()=>{const t=activeTab();if(!t)retur
   edStatus.innerHTML='<span class="muted">reverted '+t.path+'</span>';};
 edText.addEventListener('input',()=>{const t=activeTab();if(t){t.content=edText.value;
   const d=t.content!==t.clean; if(d!==t.dirty){t.dirty=d;renderTabs();}} render();});
-edText.addEventListener('scroll',()=>{edHLpre.scrollTop=edText.scrollTop;edHLpre.scrollLeft=edText.scrollLeft;});
+edText.addEventListener('scroll',()=>{edHLpre.scrollTop=edText.scrollTop;edHLpre.scrollLeft=edText.scrollLeft;
+  edNums.style.transform='translateY('+(-edText.scrollTop)+'px)';});
 edText.addEventListener('keydown',e=>{
   if((e.ctrlKey||e.metaKey)&&e.key==='s'){e.preventDefault();saveActive();}
+  if((e.ctrlKey||e.metaKey)&&(e.key==='f'||e.key==='F')){e.preventDefault();openFind();}
   if(e.key==='Tab'){e.preventDefault();const s=edText.selectionStart,en=edText.selectionEnd;
     edText.value=edText.value.slice(0,s)+'    '+edText.value.slice(en);
     edText.selectionStart=edText.selectionEnd=s+4;edText.dispatchEvent(new Event('input'));}
 });
+
+// ---- find within the editor (Ctrl/Cmd+F) ----
+const edFindBar=document.getElementById('edFindBar'), edFindInput=document.getElementById('edFindInput'),
+      edFindCnt=document.getElementById('edFindCnt');
+let findMatches=[], findIdx=-1;
+function openFind(){
+  edFindBar.classList.add('on');
+  const sel=edText.value.substring(edText.selectionStart,edText.selectionEnd);
+  if(sel && sel.length<60 && !sel.includes('\n')) edFindInput.value=sel;
+  edFindInput.focus(); edFindInput.select(); runFind();
+}
+function closeFind(){ edFindBar.classList.remove('on'); edText.focus(); }
+function runFind(){
+  const q=edFindInput.value; findMatches=[]; findIdx=-1;
+  if(q){ const hay=edText.value.toLowerCase(), needle=q.toLowerCase();
+    let i=hay.indexOf(needle);
+    while(i!==-1){ findMatches.push(i); i=hay.indexOf(needle, i+Math.max(1,needle.length)); } }
+  if(findMatches.length){ findIdx=0; jumpFind(); }
+  else { edFindCnt.textContent=q?'0/0':'0/0'; }
+}
+function jumpFind(){
+  if(findIdx<0||!findMatches.length) return;
+  const start=findMatches[findIdx], end=start+edFindInput.value.length;
+  edText.setSelectionRange(start,end); // visible (greyed) without stealing focus from the find box
+  const line=(edText.value.slice(0,start).match(/\n/g)||[]).length;
+  edText.scrollTop=Math.max(0, line*LINE_H - edText.clientHeight/2);
+  edNums.style.transform='translateY('+(-edText.scrollTop)+'px)';
+  edHLpre.scrollTop=edText.scrollTop;
+  edFindCnt.textContent=(findIdx+1)+'/'+findMatches.length;
+}
+function nextFind(d){ if(!findMatches.length)return; findIdx=(findIdx+d+findMatches.length)%findMatches.length; jumpFind(); }
+edFindInput.addEventListener('input', runFind);
+edFindInput.addEventListener('keydown', e=>{
+  if(e.key==='Enter'){ e.preventDefault(); nextFind(e.shiftKey?-1:1); }
+  if(e.key==='Escape'){ e.preventDefault(); closeFind(); }
+});
+document.getElementById('edFindNext').onclick=()=>nextFind(1);
+document.getElementById('edFindPrev').onclick=()=>nextFind(-1);
+document.getElementById('edFindClose').onclick=closeFind;
 // re-read open, unmodified files after the agent edits them on disk
 async function refreshOpen(){
   for(const t of tabs){ if(t.dirty)continue;

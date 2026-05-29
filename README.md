@@ -95,7 +95,8 @@ extra dependencies) that drives the same agent:
 - switch **provider/model** on the fly and clear the conversation
 - a **tools panel** with four tabs that work independently of the model:
   - **Editor** — an in-browser IDE: file tree, **multi-file tabs** (with
-    unsaved-change indicators), and a code editor with **syntax highlighting**
+    unsaved-change indicators), **line numbers**, in-editor **find** (`Ctrl+F`
+    with next/prev + match count), and **syntax highlighting**
     (Python, JS/TS, JSON, HTML, CSS, shell, Markdown — all zero-dependency),
     plus Save / Revert / `Ctrl+S` / `Tab`-indent, sandboxed to the working
     directory. It auto-refreshes open files when the agent edits them.
