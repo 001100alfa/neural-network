@@ -916,9 +916,11 @@ INDEX_HTML = r"""<!DOCTYPE html>
 <title>AIO — Coding Agent Dashboard</title>
 <style>
   :root{--bg:#0d1117;--panel:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;
-        --accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d29922;--mag:#bc8cff;--fz:14px;}
+        --accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d29922;--mag:#bc8cff;--fz:14px;
+        --field:#0d1117;--hover:#1c2128;}
   body.light{--bg:#ffffff;--panel:#f3f5f8;--border:#d0d7de;--text:#1f2328;--muted:#636c76;
-        --accent:#0969da;--green:#1a7f37;--red:#cf222e;--yellow:#9a6700;--mag:#8250df;}
+        --accent:#0969da;--green:#1a7f37;--red:#cf222e;--yellow:#9a6700;--mag:#8250df;
+        --field:#ffffff;--hover:#eaeef2;}
   *{box-sizing:border-box}
   body{margin:0;font:var(--fz)/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
        background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column}
@@ -932,7 +934,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         box-shadow:0 6px 24px rgba(0,0,0,.4)}
   .searchres.on{display:flex}
   .searchres .sr{padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer;font-size:12px}
-  .searchres .sr:hover{background:#0d1117}
+  .searchres .sr:hover{background:var(--hover)}
   .searchres .sr b{color:var(--text)} .searchres .sr small{color:var(--muted)}
   main.dragging{outline:2px dashed var(--accent);outline-offset:-6px}
   header{display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid var(--border);
@@ -940,7 +942,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
   header h1{font-size:16px;margin:0;letter-spacing:.5px}
   header h1 .tag{color:var(--accent)}
   .badges{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto;align-items:center}
-  select,input,button{background:#0d1117;color:var(--text);border:1px solid var(--border);
+  select,input,button{background:var(--field);color:var(--text);border:1px solid var(--border);
         border-radius:6px;padding:6px 10px;font-size:13px}
   button{cursor:pointer}
   button:hover{border-color:var(--accent)}
@@ -957,7 +959,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .assistant{align-self:flex-start;background:var(--panel);border:1px solid var(--border)}
   .event{align-self:flex-start;max-width:80%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
          font-size:12.5px;border-radius:8px;border:1px solid var(--border);overflow:hidden}
-  .event .head{padding:6px 10px;background:#1c2128;color:var(--accent)}
+  .event .head{padding:6px 10px;background:var(--hover);color:var(--accent)}
   .event .body{padding:8px 10px;white-space:pre-wrap;color:var(--muted);max-height:260px;overflow:auto}
   .event.err .head{color:var(--red)}
   .diff .add{color:var(--green)} .diff .del{color:var(--red)} .diff .hunk{color:var(--accent)}
@@ -985,7 +987,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .phdr{display:flex;flex-direction:column;gap:2px;padding-bottom:8px;border-bottom:1px solid var(--border)}
   .phdr .muted{font-size:11px}
   .provlist{flex:1;overflow:auto;display:flex;flex-direction:column;gap:8px;padding-top:8px}
-  .pcard{border:1px solid var(--border);border-radius:8px;padding:8px 10px;background:#0d1117}
+  .pcard{border:1px solid var(--border);border-radius:8px;padding:8px 10px;background:var(--field)}
   .pcard.active{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
   .pcard .ptitle{display:flex;align-items:center;gap:8px;margin-bottom:6px}
   .pcard .ptitle b{font-size:13px}
@@ -1001,7 +1003,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .padv{font-size:11px;color:var(--muted);cursor:pointer;user-select:none}
   .padv-body{display:none} .padv-body.on{display:block}
   .usagebar{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--text);
-        background:#0d1117;border:1px solid var(--border);border-radius:6px;padding:5px 8px;margin:8px 0}
+        background:var(--field);border:1px solid var(--border);border-radius:6px;padding:5px 8px;margin:8px 0}
   .usagebar b{color:var(--green)} .usagebar .bwarn{color:var(--red)}
   .sep{color:var(--border)}
   /* conversation tabs */
@@ -1009,7 +1011,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .convtabs .ctab{display:flex;align-items:center;gap:6px;padding:5px 10px;border:1px solid var(--border);
         border-bottom:0;border-radius:8px 8px 0 0;background:var(--panel);color:var(--muted);cursor:pointer;
         white-space:nowrap;font-size:12px}
-  .convtabs .ctab.active{color:var(--text);background:#0d1117;box-shadow:inset 0 2px 0 var(--accent)}
+  .convtabs .ctab.active{color:var(--text);background:var(--bg);box-shadow:inset 0 2px 0 var(--accent)}
   .convtabs .ctab .x{color:var(--muted)} .convtabs .ctab .x:hover{color:var(--red)}
   .convtabs .newconv{border:1px dashed var(--border);border-radius:8px;background:transparent;color:var(--muted);
         cursor:pointer;padding:5px 10px}
@@ -1021,7 +1023,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .attachbar .thumb .x{position:absolute;top:0;right:2px;color:#fff;cursor:pointer;text-shadow:0 0 3px #000}
   .msg .imgs{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
   .msg .imgs img{max-width:160px;max-height:160px;border-radius:6px;border:1px solid var(--border)}
-  #attachBtn{padding:0 10px;background:#0d1117}
+  #attachBtn{padding:0 10px;background:var(--field)}
   /* mcp panel */
   .mcpadd{display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--border);padding-top:10px;margin-top:8px}
   .mcpadd input{padding:5px 8px;font-size:12px}
@@ -1053,7 +1055,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .code-area pre.hl code{font:inherit;white-space:pre}
   .code-area textarea{background:transparent;color:transparent;caret-color:#e6edf3;resize:none;z-index:1;outline:none}
   .findbar{position:absolute;top:6px;right:14px;z-index:5;display:none;flex-direction:column;gap:4px;
-        background:#161b22;border:1px solid var(--border);border-radius:6px;padding:6px}
+        background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:6px}
   .findbar.on{display:flex}
   .findbar .frow{display:flex;gap:4px;align-items:center}
   .findbar input{padding:3px 6px;font-size:12px;width:130px}
