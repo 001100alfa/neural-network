@@ -152,6 +152,10 @@ extra dependencies) that drives the same agent:
   models as image content
 - **multiple conversation tabs** — run several independent chats at once; each
   keeps its own history (switch / new / close)
+- **export / import** a conversation as **Markdown** or **JSON** (import opens
+  it in a new tab)
+- a **settings** popover (⚙): **light / dark** theme and adjustable **font
+  size**, persisted in your browser
 - **save / load conversations** — "Save chat" stores the session to disk
   (`~/.config/aio/sessions/`, `AIO_SESSIONS_DIR` to override); pick any saved
   session from the dropdown to reload its full history
@@ -187,7 +191,7 @@ extra dependencies) that drives the same agent:
 - small JSON API: `GET /api/info`, `GET|POST /api/providers`,
   `POST /api/providers/test`, `GET /api/usage`, `POST /api/chat`,
   `GET|POST /api/chat/stream` (SSE; POST carries images + conversation id),
-  `GET /api/sessions`, `POST /api/sessions/{save,load,delete}`,
+  `GET /api/sessions`, `POST /api/sessions/{save,load,delete,export,import}`,
   `GET /api/mcp`, `POST /api/mcp/{add,remove,restart}`,
   `POST /api/conversation/close`, `POST /api/reset`, `POST /api/config`,
   `POST /api/exec`, `POST /api/git`, `POST /api/server`,
@@ -290,6 +294,14 @@ pytest
 
 The test suite (no network required) covers tool behaviour, config precedence,
 and provider request-building / response-parsing.
+
+CI runs the linter + tests on every push/PR. Pushing a `vX.Y.Z` tag triggers
+the **release** workflow, which builds the wheel + sdist and a portable zip and
+publishes them as a GitHub Release:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
 
 ## License
 

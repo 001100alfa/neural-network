@@ -110,6 +110,37 @@ def test_multimodal_images_reach_provider(tmp_path, monkeypatch):
     assert seen["imgs"] == 1
 
 
+def test_export_markdown_and_json(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    svc.conversations["default"] = [
+        Message(role="user", content="hi there"),
+        Message(role="assistant", content="hello",
+                tool_calls=[ToolCall(id="1", name="read_file", arguments={"path": "a.py"})]),
+        Message(role="tool", content="file body", tool_call_id="1", name="read_file"),
+    ]
+    md = svc.export_session("default", "md")
+    assert md["mime"] == "text/markdown" and md["filename"].endswith(".md")
+    assert "## 🧑 User" in md["content"] and "hi there" in md["content"]
+    assert "read_file" in md["content"] and "file body" in md["content"]
+
+    js = svc.export_session("default", "json")
+    import json as _json
+    data = _json.loads(js["content"])
+    assert len(data["messages"]) == 3 and data["messages"][0]["content"] == "hi there"
+
+
+def test_import_roundtrip(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    svc.conversations["default"] = [Message(role="user", content="remember me")]
+    exported = svc.export_session("default", "json")
+    import json as _json
+
+    res = svc.import_session(_json.loads(exported["content"]))
+    assert res["ok"] is True
+    assert res["conv"] != "default"  # imported into a new conversation
+    assert svc.conversations[res["conv"]][0].content == "remember me"
+
+
 def test_mcp_add_list_remove(tmp_path, monkeypatch):
     svc = _service(tmp_path, monkeypatch)
     # a command that won't start; load_mcp_tools fails gracefully, config still records
