@@ -1,0 +1,50 @@
+# AIO configuration. Copy to `.aio.toml` (git-ignored) and edit.
+# Every value is optional; sensible defaults and environment variables are used.
+
+# Which provider to use by default: anthropic | openai | openrouter | ollama
+# If omitted, AIO auto-detects based on which API key env var is set,
+# falling back to local Ollama.
+provider = "anthropic"
+
+# Approve all tool calls automatically (skip prompts). Use with care.
+auto_approve = false
+
+# Allow tools to touch files outside the working directory.
+allow_outside_workdir = false
+
+# Maximum agent steps (model<->tool round trips) per user turn.
+max_steps = 50
+
+# ----- Per-provider settings -------------------------------------------------
+# API keys can also come from env vars: ANTHROPIC_API_KEY, OPENAI_API_KEY,
+# OPENROUTER_API_KEY. Ollama needs no key.
+
+[providers.anthropic]
+model = "claude-sonnet-4-6"
+# api_key = "sk-ant-..."
+
+[providers.openai]
+model = "gpt-4o"
+# api_key = "sk-..."
+
+[providers.openrouter]
+model = "anthropic/claude-sonnet-4-6"
+# api_key = "sk-or-..."
+
+[providers.ollama]
+model = "qwen2.5-coder"
+base_url = "http://localhost:11434/v1"
+
+# ----- Optional: MCP servers -------------------------------------------------
+# Each server is started over stdio and its tools become available to the agent
+# as `<server-name>__<tool-name>`.
+
+# [[mcp.servers]]
+# name = "filesystem"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
+
+# [[mcp.servers]]
+# name = "fetch"
+# command = "uvx"
+# args = ["mcp-server-fetch"]
