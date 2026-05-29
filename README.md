@@ -154,7 +154,10 @@ extra dependencies) that drives the same agent:
   keys (stored locally, `chmod 600`, masked in the UI and never returned by the
   API), set each one's model and base URL, and pick the active provider with one
   click. Keys persist across restarts in `~/.config/aio/keys.json`
-  (`AIO_KEYS_FILE` to override).
+  (`AIO_KEYS_FILE` to override). Each card has a **Test connection** button that
+  validates the key and **fetches the provider's live model list** (offered as
+  autocomplete on the model field). A **usage / cost indicator** shows session
+  requests, input/output tokens and an estimated USD cost.
 - a **tools panel** with these tabs that work independently of the model:
   - **Editor** — an in-browser IDE: file tree, **multi-file tabs** (with
     unsaved-change indicators), **line numbers**, in-editor **find & replace**
@@ -169,7 +172,8 @@ extra dependencies) that drives the same agent:
     commit box, with colour-coded diff output
   - **Web server** — start/stop a static file server that serves the working
     directory (handy for previewing built sites), with a clickable link
-- small JSON API: `GET /api/info`, `GET|POST /api/providers`, `POST /api/chat`,
+- small JSON API: `GET /api/info`, `GET|POST /api/providers`,
+  `POST /api/providers/test`, `GET /api/usage`, `POST /api/chat`,
   `GET /api/chat/stream` (SSE), `POST /api/reset`, `POST /api/config`,
   `POST /api/exec`, `POST /api/git`, `POST /api/server`,
   `POST /api/fs/{tree,read,write}`

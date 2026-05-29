@@ -87,6 +87,27 @@ class OpenAICompatProvider(Provider):
                 out.append({"role": "user", "content": m.content})
         return out
 
+    def _models_request(self) -> tuple[str, dict[str, str]]:
+        base = self.base_url or self.default_base_url
+        headers = {}
+        if self.api_key:
+            headers["authorization"] = f"Bearer {self.api_key}"
+        return f"{base}/models", headers
+
+    @staticmethod
+    def _parse_models(data: dict[str, Any]) -> list[str]:
+        items = data.get("data", data) if isinstance(data, dict) else data
+        ids = []
+        for m in items or []:
+            mid = m.get("id") if isinstance(m, dict) else None
+            if mid:
+                ids.append(mid)
+        return sorted(ids)
+
+    def list_models(self) -> list[str]:
+        url, headers = self._models_request()
+        return self._parse_models(self._get(url, headers))
+
     def _parse_response(self, data: dict[str, Any]) -> AssistantTurn:
         if "error" in data and "choices" not in data:  # pragma: no cover - network path
             err = data["error"]

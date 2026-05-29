@@ -95,6 +95,24 @@ class AnthropicProvider(Provider):
         flush_results()
         return out
 
+    def _models_request(self) -> tuple[str, dict[str, str]]:
+        if not self.api_key:
+            raise ProviderError("Anthropic API key missing.")
+        url = f"{self.base_url or 'https://api.anthropic.com'}/v1/models?limit=1000"
+        headers = {
+            "x-api-key": self.api_key,
+            "anthropic-version": ANTHROPIC_VERSION,
+        }
+        return url, headers
+
+    @staticmethod
+    def _parse_models(data: dict[str, Any]) -> list[str]:
+        return [m.get("id", "") for m in data.get("data", []) if m.get("id")]
+
+    def list_models(self) -> list[str]:
+        url, headers = self._models_request()
+        return self._parse_models(self._get(url, headers))
+
     def _parse_response(self, data: dict[str, Any]) -> AssistantTurn:
         if data.get("type") == "error":  # pragma: no cover - network path
             err = data.get("error", {})

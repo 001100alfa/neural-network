@@ -124,6 +124,24 @@ def test_openai_parse():
     assert turn.tool_calls[0].arguments == {"path": "y"}
 
 
+def test_anthropic_models_request_and_parse():
+    p = AnthropicProvider(model="x", api_key="k")
+    url, headers = p._models_request()
+    assert url.endswith("/v1/models?limit=1000")
+    assert headers["x-api-key"] == "k" and "anthropic-version" in headers
+    ids = p._parse_models({"data": [{"id": "claude-a"}, {"id": "claude-b"}, {"x": 1}]})
+    assert ids == ["claude-a", "claude-b"]
+
+
+def test_openai_models_request_and_parse():
+    p = OpenAICompatProvider(model="x", api_key="k", base_url="https://api.groq.com/openai/v1")
+    url, headers = p._models_request()
+    assert url == "https://api.groq.com/openai/v1/models"
+    assert headers["authorization"] == "Bearer k"
+    # ids come back sorted
+    assert p._parse_models({"data": [{"id": "b"}, {"id": "a"}]}) == ["a", "b"]
+
+
 def test_new_providers_use_openai_compatible_endpoints():
     """The 6 added global providers build as OpenAI-compatible with their URL."""
     from aio.config import load_config

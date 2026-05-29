@@ -26,14 +26,26 @@ class Agent:
         self.system_prompt = system_prompt
         self.max_steps = max_steps
         self.messages: list[Message] = []
+        #: token usage accumulated during the most recent run()
+        self.run_usage: dict[str, int] = {"requests": 0, "input_tokens": 0, "output_tokens": 0}
 
     def reset(self) -> None:
         self.messages = []
+
+    @staticmethod
+    def _normalise_usage(usage: dict | None) -> tuple[int, int]:
+        """Return (input_tokens, output_tokens) across provider formats."""
+        if not usage:
+            return 0, 0
+        inp = usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0
+        out = usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0
+        return int(inp), int(out)
 
     def run(self, user_input: str) -> str:
         """Run one user turn to completion; returns the final assistant text."""
 
         self.messages.append(Message(role="user", content=user_input))
+        self.run_usage = {"requests": 0, "input_tokens": 0, "output_tokens": 0}
         final_text = ""
 
         for _ in range(self.max_steps):
@@ -41,6 +53,10 @@ class Agent:
             turn = self.provider.chat(
                 self.messages, tools=self.tools.specs(), system=self.system_prompt
             )
+            inp, out = self._normalise_usage(turn.usage)
+            self.run_usage["requests"] += 1
+            self.run_usage["input_tokens"] += inp
+            self.run_usage["output_tokens"] += out
             self.messages.append(
                 Message(role="assistant", content=turn.content, tool_calls=turn.tool_calls)
             )
