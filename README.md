@@ -3,10 +3,19 @@
 A free, open-source terminal coding agent — a Claude Code / Aider / OpenCode
 style assistant — that speaks to **many model providers behind one interface**:
 
-| Provider | Models | Key |
-|----------|--------|-----|
-| **Anthropic** | Claude (Opus / Sonnet / Haiku) | `ANTHROPIC_API_KEY` |
-| **OpenAI** | GPT-4o / GPT-4.x etc. | `OPENAI_API_KEY` |
+**10 global providers** out of the box (manage them in the dashboard's
+**Providers** tab, or via env vars):
+
+| Provider | Default model | Key env |
+|----------|---------------|---------|
+| **Anthropic** | claude-sonnet-4-6 | `ANTHROPIC_API_KEY` |
+| **OpenAI** | gpt-4o | `OPENAI_API_KEY` |
+| **Google Gemini** | gemini-2.0-flash | `GEMINI_API_KEY` |
+| **Groq** | llama-3.3-70b-versatile | `GROQ_API_KEY` |
+| **Mistral AI** | mistral-large-latest | `MISTRAL_API_KEY` |
+| **DeepSeek** | deepseek-chat | `DEEPSEEK_API_KEY` |
+| **xAI (Grok)** | grok-2-latest | `XAI_API_KEY` |
+| **Together AI** | Llama-3.3-70B-Instruct-Turbo | `TOGETHER_API_KEY` |
 | **OpenRouter** | one key, hundreds of models | `OPENROUTER_API_KEY` |
 | **Ollama** | local Llama / Qwen / DeepSeek — 100% free & offline | _none_ |
 
@@ -141,7 +150,12 @@ extra dependencies) that drives the same agent:
   diffs** appear as they happen
 - sidebar listing the available tools and the working directory
 - switch **provider/model** on the fly and clear the conversation
-- a **tools panel** with four tabs that work independently of the model:
+- a **Providers tab** — a panel for all **10 AI providers**: enter/replace API
+  keys (stored locally, `chmod 600`, masked in the UI and never returned by the
+  API), set each one's model and base URL, and pick the active provider with one
+  click. Keys persist across restarts in `~/.config/aio/keys.json`
+  (`AIO_KEYS_FILE` to override).
+- a **tools panel** with these tabs that work independently of the model:
   - **Editor** — an in-browser IDE: file tree, **multi-file tabs** (with
     unsaved-change indicators), **line numbers**, in-editor **find & replace**
     (`Ctrl+F`, next/prev + match count, Replace / Replace-all), and
@@ -155,7 +169,7 @@ extra dependencies) that drives the same agent:
     commit box, with colour-coded diff output
   - **Web server** — start/stop a static file server that serves the working
     directory (handy for previewing built sites), with a clickable link
-- small JSON API: `GET /api/info`, `POST /api/chat`,
+- small JSON API: `GET /api/info`, `GET|POST /api/providers`, `POST /api/chat`,
   `GET /api/chat/stream` (SSE), `POST /api/reset`, `POST /api/config`,
   `POST /api/exec`, `POST /api/git`, `POST /api/server`,
   `POST /api/fs/{tree,read,write}`
