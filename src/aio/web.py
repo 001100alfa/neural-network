@@ -399,13 +399,23 @@ def _make_handler(service: AgentService):
     return Handler
 
 
-def serve(config: Config, host: str = "127.0.0.1", port: int = 8765) -> None:
+def serve(
+    config: Config, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = False
+) -> None:
     service = AgentService(config)
     httpd = ThreadingHTTPServer((host, port), _make_handler(service))
-    url = f"http://{host}:{port}"
+    # When bound to 0.0.0.0, the browsable URL is localhost.
+    browse_host = "localhost" if host in ("0.0.0.0", "") else host
+    url = f"http://{browse_host}:{port}"
     print(f"AIO web dashboard running at {url}")
     print(f"provider={config.provider}  model={config.active.model}  workdir={config.workdir}")
     print("tool calls are auto-approved in web mode. Ctrl+C to stop.")
+    if open_browser:
+        import threading
+        import webbrowser
+
+        # Open shortly after the server starts listening.
+        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

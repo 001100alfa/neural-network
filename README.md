@@ -37,6 +37,36 @@ pip install -e .
 
 Requires Python **3.11+**.
 
+## Portable — run on Windows 11 (no install)
+
+Because AIO has **zero runtime dependencies** (pure Python standard library), it
+runs straight from the folder — no `pip install`, no virtualenv. You only need
+**Python 3.11+** on the machine.
+
+1. Copy the project folder anywhere (USB stick, Desktop, …).
+2. Double-click **`run.bat`**.
+
+It launches the local web dashboard and opens your browser at
+**http://localhost:8765**. `Ctrl+C` (or closing the window) stops it.
+
+- PowerShell alternative: right-click **`run.ps1`** → *Run with PowerShell*
+  (or `powershell -ExecutionPolicy Bypass -File .\run.ps1`).
+- macOS/Linux: `./run.sh`
+- Pass extra options through the launcher, e.g. a different port, model or
+  working directory:
+
+  ```bat
+  run.bat --port 9000 -p ollama -C C:\path\to\your\project
+  ```
+
+Under the hood the launcher just sets `PYTHONPATH=src` and runs
+`python -m aio --web --open`, so nothing is written outside the folder.
+
+> No Python yet? Install it from <https://www.python.org/downloads/windows/>
+> and tick **“Add python.exe to PATH”**. For a fully self-contained drop
+> (Python included), unzip the official *Windows embeddable package* into a
+> `python\` subfolder and point the launcher at it.
+
 ## Quick start
 
 ```bash
