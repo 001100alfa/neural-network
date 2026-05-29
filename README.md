@@ -10,11 +10,22 @@ style assistant — that speaks to **many model providers behind one interface**
 | **OpenRouter** | one key, hundreds of models | `OPENROUTER_API_KEY` |
 | **Ollama** | local Llama / Qwen / DeepSeek — 100% free & offline | _none_ |
 
-It bundles everything you need into a single CLI: a real agent loop, file
-read/write/edit tools, filename & content search, a shell tool, git tools, an
-approval workflow with diff previews, config files, and optional
+It bundles everything you need: a real agent loop, file read/write/edit tools,
+filename & content search, a shell tool, git tools, an approval workflow with
+diff previews, config files, and optional
 [MCP](https://modelcontextprotocol.io) server integration — **with zero
 third-party runtime dependencies** (pure Python standard library).
+
+### One agent, three interfaces ("all-in-one")
+
+The same agent and tools are exposed through every surface a coding assistant
+is expected to live in:
+
+| Surface | Category | How |
+|---------|----------|-----|
+| **Terminal / CLI** | terminal coding agent | `aio "…"` or the `aio` REPL |
+| **Web dashboard** | browser app with built-in **IDE/editor** | `aio --web` |
+| **VS Code extension** | IDE / editor-integrated | [`editor/vscode/`](editor/vscode/) |
 
 ## Install
 
@@ -82,7 +93,10 @@ extra dependencies) that drives the same agent:
   calls, tool results, and **colour-coded diffs** for every file edit
 - sidebar listing the available tools and the working directory
 - switch **provider/model** on the fly and clear the conversation
-- a **tools panel** with three tabs that work independently of the model:
+- a **tools panel** with four tabs that work independently of the model:
+  - **Editor** — an in-browser IDE: file tree, a code editor with
+    Save / Revert / `Ctrl+S` / `Tab`-indent, sandboxed to the working directory.
+    It auto-refreshes when the agent edits files.
   - **Terminal** — run `cmd` / `bash` / `sh` commands directly in the working
     directory and see stdout/stderr + exit code
   - **Git** — one-click `status` / `diff` / `staged` / `log` / `add`, plus a
@@ -90,7 +104,8 @@ extra dependencies) that drives the same agent:
   - **Web server** — start/stop a static file server that serves the working
     directory (handy for previewing built sites), with a clickable link
 - small JSON API: `GET /api/info`, `POST /api/chat`, `POST /api/reset`,
-  `POST /api/config`, `POST /api/exec`, `POST /api/git`, `POST /api/server`
+  `POST /api/config`, `POST /api/exec`, `POST /api/git`, `POST /api/server`,
+  `POST /api/fs/{tree,read,write}`
 
 > In web mode tool calls are **auto-approved** (there is no terminal to prompt),
 > so run it locally against projects you trust. It binds to `127.0.0.1` by default.
@@ -172,6 +187,9 @@ src/aio/
 │   ├── anthropic.py  #   native Messages API
 │   └── openai_compat.py  # OpenAI / OpenRouter / Ollama
 └── tools/            # read, write, edit, glob, grep, shell, git
+
+editor/
+└── vscode/           # VS Code extension (IDE/editor integration)
 ```
 
 The agent normalises every provider to a common `Message`/`ToolCall` shape, so

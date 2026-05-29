@@ -24,7 +24,7 @@ from typing import Any
 from .agent import Agent
 from .config import Config
 from .providers import ProviderError, build_provider
-from .tools import ToolContext, default_registry
+from .tools import ToolContext, ToolError, default_registry
 
 
 class EventUI:
@@ -238,6 +238,45 @@ class AgentService:
                 self._static_port = None
             return self.server_status()
 
+    # -- Editor (in-browser IDE) -----------------------------------------
+    def fs_tree(self, limit: int = 1000) -> dict[str, Any]:
+        from .tools.search import IGNORE_DIRS
+
+        root = self.config.workdir
+        files: list[str] = []
+        for p in sorted(root.rglob("*")):
+            if p.is_dir():
+                continue
+            rel_parts = p.relative_to(root).parts
+            if any(part in IGNORE_DIRS for part in rel_parts):
+                continue
+            files.append(str(p.relative_to(root)))
+            if len(files) >= limit:
+                break
+        return {"root": str(root), "files": files}
+
+    def fs_read(self, path: str) -> dict[str, Any]:
+        try:
+            p = self.agent.ctx.safe_path(path)
+        except ToolError as exc:
+            return {"error": str(exc)}
+        if not p.is_file():
+            return {"error": f"not a file: {path}"}
+        try:
+            content = p.read_text("utf-8")
+        except UnicodeDecodeError:
+            return {"error": f"binary file (cannot edit as text): {path}"}
+        return {"path": path, "content": content}
+
+    def fs_write(self, path: str, content: str) -> dict[str, Any]:
+        try:
+            p = self.agent.ctx.safe_path(path)
+        except ToolError as exc:
+            return {"error": str(exc)}
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        return {"ok": True, "path": path, "bytes": len(content)}
+
 
 def _make_handler(service: AgentService):
     class Handler(BaseHTTPRequestHandler):
@@ -293,6 +332,12 @@ def _make_handler(service: AgentService):
                         self._json(200, service.server_stop())
                     else:
                         self._json(200, service.server_status())
+                elif self.path == "/api/fs/tree":
+                    self._json(200, service.fs_tree())
+                elif self.path == "/api/fs/read":
+                    self._json(200, service.fs_read(payload.get("path", "")))
+                elif self.path == "/api/fs/write":
+                    self._json(200, service.fs_write(payload.get("path", ""), payload.get("content", "")))
                 else:
                     self._json(404, {"error": "not found"})
             except ProviderError as exc:
@@ -364,7 +409,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
   #send:disabled{opacity:.5;cursor:not-allowed}
   .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-right:6px}
   /* right-hand tools panel */
-  .panel{width:380px;border-left:1px solid var(--border);background:var(--panel);display:flex;flex-direction:column}
+  .panel{width:460px;border-left:1px solid var(--border);background:var(--panel);display:flex;flex-direction:column}
   .tabs{display:flex;border-bottom:1px solid var(--border)}
   .tabs button{flex:1;border:0;border-radius:0;background:transparent;color:var(--muted);padding:10px}
   .tabs button.active{color:var(--text);box-shadow:inset 0 -2px 0 var(--accent)}
@@ -379,6 +424,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .gitbtns button{flex:1 1 30%}
   .ec0{color:var(--green)} .ecN{color:var(--red)}
   a.link{color:var(--accent)}
+  /* editor / IDE tab */
+  #edText{flex:1;min-height:300px;resize:none;background:#010409;border:1px solid var(--border);
+          border-radius:6px;padding:10px;color:#c9d1d9;
+          font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.5;
+          tab-size:4;white-space:pre;overflow:auto}
+  #edFile{flex:1}
+  .ok{color:var(--green)} .muted{color:var(--muted)}
 </style>
 </head>
 <body>
@@ -411,12 +463,26 @@ INDEX_HTML = r"""<!DOCTYPE html>
   </main>
   <div class="panel">
     <div class="tabs">
-      <button data-tab="terminal" class="active">Terminal</button>
+      <button data-tab="editor" class="active">Editor</button>
+      <button data-tab="terminal">Terminal</button>
       <button data-tab="git">Git</button>
       <button data-tab="server">Web server</button>
     </div>
 
-    <div class="tab active" id="tab-terminal">
+    <div class="tab active" id="tab-editor">
+      <div class="row">
+        <select id="edFile"><option value="">— open a file —</option></select>
+        <button id="edReload" title="reload file tree">⟳</button>
+      </div>
+      <textarea id="edText" spellcheck="false" placeholder="select a file to edit…"></textarea>
+      <div class="row">
+        <span id="edStatus" class="muted" style="flex:1;align-self:center"></span>
+        <button id="edRevert">Revert</button>
+        <button id="edSave">Save</button>
+      </div>
+    </div>
+
+    <div class="tab" id="tab-terminal">
       <div class="console" id="termOut">$ run shell / bash commands here (executed directly, not via the model)
 </div>
       <div class="row">
@@ -516,6 +582,7 @@ async function sendMsg(){
     const d=await r.json(); think.remove();
     (d.events||[]).forEach(addEvent);
     if(d.error){ addEvent({type:'error',text:d.error}); }
+    if((d.events||[]).some(e=>e.type==='diff')){ loadTree(); if(edFile.value) openFile(edFile.value); }
   }catch(e){ think.remove(); addEvent({type:'error',text:String(e)}); }
   send.disabled=false; input.focus();
 }
@@ -596,6 +663,45 @@ async function srv(action){
 document.getElementById('srvStart').onclick=()=>srv('start');
 document.getElementById('srvStop').onclick=()=>srv('stop');
 document.getElementById('srvStatus').onclick=()=>srv('status');
+
+// ---- Editor (in-browser IDE) ----
+const edFile=document.getElementById('edFile'), edText=document.getElementById('edText'),
+      edStatus=document.getElementById('edStatus');
+let edClean='';
+async function loadTree(){
+  const r=await fetch('/api/fs/tree',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  const d=await r.json(); const cur=edFile.value;
+  edFile.innerHTML='<option value="">— open a file —</option>';
+  (d.files||[]).forEach(f=>{const o=document.createElement('option');o.value=f;o.textContent=f;edFile.appendChild(o);});
+  if(cur) edFile.value=cur;
+}
+async function openFile(path){
+  if(!path){edText.value='';edStatus.textContent='';return;}
+  const r=await fetch('/api/fs/read',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({path})});
+  const d=await r.json();
+  if(d.error){edStatus.innerHTML='<span class="ecN">'+d.error+'</span>';edText.value='';return;}
+  edText.value=d.content; edClean=d.content; edStatus.innerHTML='<span class="muted">'+path+'</span>';
+}
+async function saveFile(){
+  const path=edFile.value; if(!path){edStatus.textContent='no file selected';return;}
+  const r=await fetch('/api/fs/write',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({path,content:edText.value})});
+  const d=await r.json();
+  if(d.error){edStatus.innerHTML='<span class="ecN">'+d.error+'</span>';return;}
+  edClean=edText.value; edStatus.innerHTML='<span class="ok">saved '+path+' ('+d.bytes+' bytes)</span>';
+}
+edFile.onchange=()=>openFile(edFile.value);
+document.getElementById('edReload').onclick=loadTree;
+document.getElementById('edSave').onclick=saveFile;
+document.getElementById('edRevert').onclick=()=>{edText.value=edClean;edStatus.innerHTML='<span class="muted">reverted</span>';};
+edText.addEventListener('input',()=>{ if(edFile.value) edStatus.innerHTML='<span class="muted">'+edFile.value+' • unsaved</span>'; });
+edText.addEventListener('keydown',e=>{ // Ctrl/Cmd+S to save, Tab inserts spaces
+  if((e.ctrlKey||e.metaKey)&&e.key==='s'){e.preventDefault();saveFile();}
+  if(e.key==='Tab'){e.preventDefault();const s=edText.selectionStart,en=edText.selectionEnd;
+    edText.value=edText.value.slice(0,s)+'    '+edText.value.slice(en);edText.selectionStart=edText.selectionEnd=s+4;}
+});
+loadTree();
 
 loadInfo();
 </script>

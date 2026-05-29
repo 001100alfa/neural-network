@@ -111,3 +111,31 @@ def test_static_server_lifecycle(tmp_path, monkeypatch):
     assert started["running"] is True
     stopped = svc.server_stop()
     assert stopped["running"] is False
+
+
+def test_editor_tree_read_write(tmp_path, monkeypatch):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("x = 1\n")
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / "junk.js").write_text("// ignored")
+    svc = _service(tmp_path, monkeypatch)
+
+    tree = svc.fs_tree()
+    assert "src/app.py" in tree["files"]
+    assert all("node_modules" not in f for f in tree["files"])  # ignored dirs excluded
+
+    read = svc.fs_read("src/app.py")
+    assert read["content"] == "x = 1\n"
+
+    written = svc.fs_write("src/app.py", "x = 2\n")
+    assert written["ok"] is True
+    assert (tmp_path / "src" / "app.py").read_text() == "x = 2\n"
+    # and new files can be created
+    svc.fs_write("docs/new.md", "# hi")
+    assert (tmp_path / "docs" / "new.md").read_text() == "# hi"
+
+
+def test_editor_sandboxed(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    res = svc.fs_read("../../etc/passwd")
+    assert "error" in res  # escaping the workdir is refused
