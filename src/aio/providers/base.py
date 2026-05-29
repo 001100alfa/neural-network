@@ -108,6 +108,13 @@ class Provider(ABC):
     def _post(self, url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
         raw = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(url, data=raw, headers=headers, method="POST")
+        return self._send(req, url)
+
+    def _get(self, url: str, headers: dict[str, str]) -> dict[str, Any]:
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        return self._send(req, url)
+
+    def _send(self, req: "urllib.request.Request", url: str) -> dict[str, Any]:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
@@ -121,3 +128,13 @@ class Provider(ABC):
                 f"{self.name} request failed: {exc.reason}. "
                 f"Is the endpoint reachable ({url})?"
             ) from exc
+
+    # -- model discovery / connection test --------------------------------
+
+    def list_models(self) -> list[str]:
+        """Return the model IDs available for this provider's API key.
+
+        Doubles as a lightweight connection/key test: a successful call proves
+        the endpoint is reachable and the key is accepted. Subclasses override.
+        """
+        raise NotImplementedError(f"{self.name} does not support model listing")

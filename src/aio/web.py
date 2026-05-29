@@ -24,6 +24,7 @@ from typing import Any
 
 from .agent import Agent
 from .config import PROVIDER_DEFAULTS, Config, KeyStore
+from .pricing import estimate_cost
 from .providers import ProviderError, build_provider
 from .tools import ToolContext, ToolError, default_registry
 
@@ -107,6 +108,11 @@ class AgentService:
         # top of env/config so they survive restarts.
         self.keys = KeyStore.load()
         self.keys.apply_to(self.config)
+        # cumulative token usage / cost estimate for this session
+        self.usage: dict[str, Any] = {
+            "requests": 0, "input_tokens": 0, "output_tokens": 0,
+            "est_cost_usd": 0.0, "cost_known": True, "by_provider": {},
+        }
         # state for the embedded static "web server" panel
         self._static_host = "127.0.0.1"
         self._static_httpd: ThreadingHTTPServer | None = None
@@ -150,7 +156,8 @@ class AgentService:
             except ProviderError as exc:
                 self.ui.error(str(exc))
                 final = ""
-            return {"events": self.ui.drain(), "final": final}
+            self._accumulate_usage()
+            return {"events": self.ui.drain(), "final": final, "usage": self.usage_info()}
 
     def chat_stream(self, message: str, emit) -> None:
         """Run a turn, delivering each event to ``emit`` as it happens.
@@ -168,7 +175,34 @@ class AgentService:
                 final = ""
             finally:
                 self.ui.sink = None
-            emit({"type": "done", "final": final})
+            self._accumulate_usage()
+            emit({"type": "done", "final": final, "usage": self.usage_info()})
+
+    def _accumulate_usage(self) -> None:
+        ru = getattr(self.agent, "run_usage", None) or {}
+        inp = ru.get("input_tokens", 0)
+        out = ru.get("output_tokens", 0)
+        reqs = ru.get("requests", 0)
+        if reqs == 0 and inp == 0 and out == 0:
+            return
+        provider, model = self.config.provider, self.config.active.model
+        cost, known = estimate_cost(model, inp, out)
+        self.usage["requests"] += reqs
+        self.usage["input_tokens"] += inp
+        self.usage["output_tokens"] += out
+        self.usage["est_cost_usd"] = round(self.usage["est_cost_usd"] + cost, 6)
+        if not known and (inp or out):
+            self.usage["cost_known"] = False
+        bp = self.usage["by_provider"].setdefault(
+            provider, {"requests": 0, "input_tokens": 0, "output_tokens": 0, "est_cost_usd": 0.0}
+        )
+        bp["requests"] += reqs
+        bp["input_tokens"] += inp
+        bp["output_tokens"] += out
+        bp["est_cost_usd"] = round(bp["est_cost_usd"] + cost, 6)
+
+    def usage_info(self) -> dict[str, Any]:
+        return dict(self.usage)
 
     def reset(self) -> dict[str, Any]:
         with self._lock:
@@ -217,7 +251,26 @@ class AgentService:
                     "active": name == self.config.provider,
                 }
             )
-        return {"active": self.config.provider, "providers": out}
+        return {"active": self.config.provider, "providers": out, "usage": self.usage_info()}
+
+    def test_provider(self, name: str) -> dict[str, Any]:
+        """Validate the key by listing models; returns {ok, models, count, error}."""
+        if name not in PROVIDER_DEFAULTS:
+            raise ProviderError(f"unknown provider '{name}'")
+        from .providers import build_provider as _bp
+
+        cfg_provider = self.config.provider
+        try:
+            self.config.provider = name  # build_provider reads config.active
+            provider = _bp(self.config)
+            models = provider.list_models()
+        except ProviderError as exc:
+            return {"ok": False, "error": str(exc), "models": [], "count": 0}
+        except Exception as exc:  # pragma: no cover - defensive
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "models": [], "count": 0}
+        finally:
+            self.config.provider = cfg_provider
+        return {"ok": True, "count": len(models), "models": models[:100], "error": ""}
 
     def set_provider_key(
         self,
@@ -399,6 +452,8 @@ def _make_handler(service: AgentService):
                 self._json(200, service.info())
             elif self.path == "/api/providers":
                 self._json(200, service.providers_info())
+            elif self.path == "/api/usage":
+                self._json(200, service.usage_info())
             elif self.path.startswith("/api/chat/stream"):
                 self._chat_stream()
             else:
@@ -441,6 +496,8 @@ def _make_handler(service: AgentService):
                         base_url=payload.get("base_url"),
                         make_active=bool(payload.get("make_active")),
                     ))
+                elif self.path == "/api/providers/test":
+                    self._json(200, service.test_provider(payload.get("provider", "")))
                 elif self.path == "/api/exec":
                     self._json(200, service.exec_command(
                         payload.get("command", ""), payload.get("shell", "bash")))
@@ -576,6 +633,11 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .pcard .pacts button{flex:1;padding:4px}
   .padv{font-size:11px;color:var(--muted);cursor:pointer;user-select:none}
   .padv-body{display:none} .padv-body.on{display:block}
+  .usagebar{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--text);
+        background:#0d1117;border:1px solid var(--border);border-radius:6px;padding:5px 8px;margin:8px 0}
+  .usagebar b{color:var(--green)}
+  .ptest{font-size:11px;margin-top:3px;min-height:14px}
+  .ptest.ok{color:var(--green)} .ptest.err{color:var(--red)} .ptest.muted{color:var(--muted)}
   .ec0{color:var(--green)} .ecN{color:var(--red)}
   a.link{color:var(--accent)}
   /* editor / IDE tab */
@@ -656,6 +718,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <b>AI providers &amp; API keys</b>
         <span class="muted">keys are stored locally (chmod 600) and never sent anywhere except the provider you pick</span>
       </div>
+      <div id="usageBar" class="usagebar" title="estimated; session totals">usage: —</div>
       <div id="provList" class="provlist"></div>
     </div>
 
@@ -795,7 +858,7 @@ function sendMsg(){
   es.onmessage=(e)=>{
     if(!gotFirst){ think.remove(); gotFirst=true; }
     let ev; try{ ev=JSON.parse(e.data); }catch(_){ return; }
-    if(ev.type==='done'){ finish(); return; }
+    if(ev.type==='done'){ if(ev.usage) renderUsage(ev.usage); finish(); return; }
     if(ev.type==='diff') sawDiff=true;
     if(ev.type!=='thinking') addEvent(ev);
   };
@@ -1080,10 +1143,21 @@ loadTree();
 
 // ---- Providers / API keys panel ----
 const provList=document.getElementById('provList');
+const usageBar=document.getElementById('usageBar');
+let provDlSeq=0;
+function fmt(n){ return (n||0).toLocaleString(); }
+function renderUsage(u){
+  if(!u){ return; }
+  const cost = u.cost_known ? ('$'+(u.est_cost_usd||0).toFixed(4)) : ('~$'+(u.est_cost_usd||0).toFixed(4)+' (partial)');
+  usageBar.innerHTML='usage — requests <b>'+fmt(u.requests)+'</b> · in <b>'+fmt(u.input_tokens)
+    +'</b> tok · out <b>'+fmt(u.output_tokens)+'</b> tok · est. cost <b>'+cost+'</b>';
+}
+async function refreshUsage(){ try{ const r=await fetch('/api/usage'); renderUsage(await r.json()); }catch(_){} }
 async function loadProviders(){
   const r=await fetch('/api/providers'); const d=await r.json();
   provList.innerHTML='';
   d.providers.forEach(p=>provList.appendChild(provCard(p)));
+  renderUsage(d.usage);
 }
 function provCard(p){
   const card=el('pcard'+(p.active?' active':''));
@@ -1103,8 +1177,10 @@ function provCard(p){
   } else {
     const note=el('muted','local runtime — no API key required'); note.style.fontSize='11px'; card.appendChild(note);
   }
+  // model field backed by a datalist that "Test" fills with the live model list
   const modelInput=document.createElement('input'); modelInput.value=p.model||''; modelInput.placeholder='model';
-  card.appendChild(modelInput);
+  const dl=document.createElement('datalist'); dl.id='dl_'+p.name+'_'+(provDlSeq++); modelInput.setAttribute('list', dl.id);
+  card.appendChild(modelInput); card.appendChild(dl);
 
   const adv=el('padv','▸ advanced (base URL)');
   const advBody=el('padv-body');
@@ -1113,14 +1189,43 @@ function provCard(p){
   adv.onclick=()=>{const on=advBody.classList.toggle('on'); adv.textContent=(on?'▾':'▸')+' advanced (base URL)';};
   card.appendChild(adv); card.appendChild(advBody);
 
+  const status=el('ptest muted',''); card.appendChild(status);
+
   const acts=el('pacts');
+  const testBtn=document.createElement('button'); testBtn.textContent='Test';
+  testBtn.onclick=()=>testProvider(p.name, keyInput, modelInput, baseInput, dl, status, testBtn);
   const saveBtn=document.createElement('button'); saveBtn.textContent='Save';
   saveBtn.onclick=()=>saveProvider(p.name, keyInput, modelInput, baseInput, false);
   const useBtn=document.createElement('button'); useBtn.textContent=p.active?'In use':'Use';
   useBtn.disabled=!!p.active;
   useBtn.onclick=()=>saveProvider(p.name, keyInput, modelInput, baseInput, true);
-  acts.appendChild(saveBtn); acts.appendChild(useBtn); card.appendChild(acts);
+  acts.appendChild(testBtn); acts.appendChild(saveBtn); acts.appendChild(useBtn);
+  card.appendChild(acts);
   return card;
+}
+async function testProvider(name, keyInput, modelInput, baseInput, dl, status, btn){
+  // Persist any typed key/base first so the test uses current values.
+  if((keyInput && keyInput.value) || (baseInput && baseInput.value)){
+    await saveProviderQuiet(name, keyInput, modelInput, baseInput);
+  }
+  status.className='ptest muted'; status.textContent='testing…'; btn.disabled=true;
+  try{
+    const r=await fetch('/api/providers/test',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({provider:name})});
+    const d=await r.json();
+    if(d.ok){
+      status.className='ptest ok'; status.textContent='✓ connected — '+d.count+' models';
+      dl.innerHTML=''; (d.models||[]).forEach(m=>{const o=document.createElement('option');o.value=m;dl.appendChild(o);});
+    } else {
+      status.className='ptest err'; status.textContent='✗ '+(d.error||'failed').split('\n')[0].slice(0,140);
+    }
+  }catch(e){ status.className='ptest err'; status.textContent='✗ '+e; }
+  btn.disabled=false;
+}
+async function saveProviderQuiet(name, keyInput, modelInput, baseInput){
+  const body={provider:name, model:modelInput.value, base_url:baseInput.value};
+  if(keyInput && keyInput.value) body.api_key=keyInput.value;
+  await fetch('/api/providers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
 }
 async function saveProvider(name, keyInput, modelInput, baseInput, makeActive){
   const body={provider:name, model:modelInput.value, base_url:baseInput.value, make_active:makeActive};

@@ -48,6 +48,48 @@ def test_set_provider_key_persists_masks_and_activates(tmp_path, monkeypatch):
     assert saved["active"] == "groq"
 
 
+def test_usage_tracking_after_chat(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)  # active=anthropic, model claude-sonnet-4-6 (priced)
+
+    class UsageProvider:
+        def chat(self, messages, tools=None, system=None):
+            return AssistantTurn(
+                content="hello", tool_calls=[],
+                usage={"input_tokens": 100, "output_tokens": 50},
+            )
+
+    svc.agent.provider = UsageProvider()
+    out = svc.chat("hi")
+    u = out["usage"]
+    assert u["requests"] == 1
+    assert u["input_tokens"] == 100 and u["output_tokens"] == 50
+    assert u["est_cost_usd"] > 0  # sonnet is in the price table
+    assert u["by_provider"]["anthropic"]["input_tokens"] == 100
+
+
+def test_test_provider_ok_and_error(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+
+    class OkProv:
+        def list_models(self):
+            return ["m-a", "m-b", "m-c"]
+
+    class BadProv:
+        def list_models(self):
+            from aio.providers import ProviderError
+            raise ProviderError("invalid api key")
+
+    monkeypatch.setattr("aio.providers.build_provider", lambda cfg: OkProv())
+    ok = svc.test_provider("groq")
+    assert ok["ok"] is True and ok["count"] == 3 and "m-a" in ok["models"]
+
+    monkeypatch.setattr("aio.providers.build_provider", lambda cfg: BadProv())
+    bad = svc.test_provider("groq")
+    assert bad["ok"] is False and "invalid api key" in bad["error"]
+    # the active provider is restored after a test
+    assert svc.config.provider == "anthropic"
+
+
 def test_keys_survive_reload(tmp_path, monkeypatch):
     svc = _service(tmp_path, monkeypatch)
     svc.set_provider_key("deepseek", api_key="ds_key_9999", model="deepseek-reasoner", make_active=True)
