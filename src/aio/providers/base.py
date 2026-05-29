@@ -43,6 +43,8 @@ class Message:
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_call_id: str | None = None
     name: str | None = None
+    #: optional image attachments on user messages: {"media_type","data"(base64)}
+    images: list[dict] = field(default_factory=list)
 
 
 @dataclass

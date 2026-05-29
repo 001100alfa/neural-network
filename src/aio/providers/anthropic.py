@@ -91,7 +91,20 @@ class AnthropicProvider(Provider):
                     )
                 out.append({"role": "assistant", "content": blocks or ""})
             else:  # user
-                out.append({"role": "user", "content": m.content})
+                if m.images:
+                    blocks = [{"type": "text", "text": m.content}] if m.content else []
+                    for img in m.images:
+                        blocks.append({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": img.get("media_type", "image/png"),
+                                "data": img.get("data", ""),
+                            },
+                        })
+                    out.append({"role": "user", "content": blocks})
+                else:
+                    out.append({"role": "user", "content": m.content})
 
         flush_results()
         return out

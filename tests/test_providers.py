@@ -164,6 +164,20 @@ def test_new_providers_use_openai_compatible_endpoints():
         assert host in url and url.endswith("/chat/completions")
 
 
+def test_image_attachments_encode_for_both_styles():
+    img = {"media_type": "image/png", "data": "B64DATA"}
+    convo = [Message(role="user", content="what is this?", images=[img])]
+
+    _, _, abody = AnthropicProvider(model="m", api_key="k")._build_payload(convo, [], None)
+    ablocks = abody["messages"][0]["content"]
+    assert any(b.get("type") == "image" and b["source"]["data"] == "B64DATA" for b in ablocks)
+    assert any(b.get("type") == "text" for b in ablocks)
+
+    _, _, obody = OpenAICompatProvider(model="m", api_key="k")._build_payload(convo, [], None)
+    oparts = obody["messages"][0]["content"]
+    assert any(p.get("type") == "image_url" and "B64DATA" in p["image_url"]["url"] for p in oparts)
+
+
 def test_ollama_default_base_url():
     p = OllamaProvider(model="qwen")
     url, headers, _ = p._build_payload([Message(role="user", content="hi")], [], None)

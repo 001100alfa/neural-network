@@ -44,10 +44,10 @@ class Agent:
         out = usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0
         return int(inp), int(out)
 
-    def run(self, user_input: str) -> str:
+    def run(self, user_input: str, images: list[dict] | None = None) -> str:
         """Run one user turn to completion; returns the final assistant text."""
 
-        self.messages.append(Message(role="user", content=user_input))
+        self.messages.append(Message(role="user", content=user_input, images=images or []))
         self.run_usage = {"requests": 0, "input_tokens": 0, "output_tokens": 0}
         final_text = ""
 
