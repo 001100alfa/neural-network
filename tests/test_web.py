@@ -41,7 +41,7 @@ def test_chat_stream_emits_tokens_not_full_text(tmp_path, monkeypatch):
 
 def test_sessions_save_list_load_delete(tmp_path, monkeypatch):
     svc = _service(tmp_path, monkeypatch)
-    svc.agent.messages = [
+    svc.conversations["default"] = [
         Message(role="user", content="hello there"),
         Message(role="assistant", content="hi!"),
     ]
@@ -77,6 +77,46 @@ def test_monthly_budget_warning(tmp_path, monkeypatch):
 def test_import_message_tool_call():
     # the Message import is wired (used by sessions)
     assert Message and ToolCall
+
+
+def test_conversations_are_isolated(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+
+    class Echo:
+        def chat(self, messages, tools=None, system=None):
+            n = sum(1 for m in messages if m.role == "user")
+            return AssistantTurn(content=f"seen {n}")
+
+    svc.agent.provider = Echo()
+    svc.chat("a", conv_id="t1")
+    svc.chat("b", conv_id="t1")
+    out2 = svc.chat("x", conv_id="t2")
+    assert out2["final"] == "seen 1"            # t2 is a fresh conversation
+    assert len(svc.conversations["t1"]) == 4    # 2 user + 2 assistant
+    assert len(svc.conversations["t2"]) == 2
+
+
+def test_multimodal_images_reach_provider(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    seen = {}
+
+    class VisionEcho:
+        def chat(self, messages, tools=None, system=None):
+            seen["imgs"] = sum(len(m.images) for m in messages if m.role == "user")
+            return AssistantTurn(content="ok")
+
+    svc.agent.provider = VisionEcho()
+    svc.chat("describe", images=[{"media_type": "image/png", "data": "X"}], conv_id="t1")
+    assert seen["imgs"] == 1
+
+
+def test_mcp_add_list_remove(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    # a command that won't start; load_mcp_tools fails gracefully, config still records
+    info = svc.mcp_add("echo", "nonexistent-cmd-xyz", args=["--x"])
+    assert "echo" in [s["name"] for s in info["servers"]]
+    info2 = svc.mcp_remove("echo")
+    assert all(s["name"] != "echo" for s in info2["servers"])
 
 
 def test_providers_panel_lists_ten(tmp_path, monkeypatch):

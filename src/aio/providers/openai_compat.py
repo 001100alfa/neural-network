@@ -84,7 +84,14 @@ class OpenAICompatProvider(Provider):
                     ]
                 out.append(msg)
             else:  # user
-                out.append({"role": "user", "content": m.content})
+                if m.images:
+                    parts = [{"type": "text", "text": m.content}] if m.content else []
+                    for img in m.images:
+                        url = f"data:{img.get('media_type', 'image/png')};base64,{img.get('data', '')}"
+                        parts.append({"type": "image_url", "image_url": {"url": url}})
+                    out.append({"role": "user", "content": parts})
+                else:
+                    out.append({"role": "user", "content": m.content})
         return out
 
     def _models_request(self) -> tuple[str, dict[str, str]]:

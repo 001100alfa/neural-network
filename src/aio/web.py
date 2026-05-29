@@ -140,12 +140,18 @@ class AgentService:
             "requests": 0, "input_tokens": 0, "output_tokens": 0,
             "est_cost_usd": 0.0, "cost_known": True, "by_provider": {},
         }
+        # multiple concurrent conversations (tabs): id -> message history
+        self.conversations: dict[str, list] = {"default": []}
+        self._active_conv = "default"
+        # MCP servers + their tools (loaded once, registered on every rebuild)
+        self._mcp_servers: list = []
+        self._mcp_tools: list = []
         # state for the embedded static "web server" panel
         self._static_host = "127.0.0.1"
         self._static_httpd: ThreadingHTTPServer | None = None
         self._static_thread: threading.Thread | None = None
         self._static_port: int | None = None
-        self._build_agent()
+        self._reload_mcp()  # also builds the agent
 
     def _build_agent(self) -> None:
         ctx = ToolContext(
@@ -154,15 +160,50 @@ class AgentService:
             auto_approve=True,  # web mode auto-approves tool calls
             allow_outside_workdir=self.config.allow_outside_workdir,
         )
+        registry = default_registry()
+        for tool in self._mcp_tools:
+            registry.register(tool)
         self.agent = Agent(
             provider=build_provider(self.config),
-            tools=default_registry(),
+            tools=registry,
             ctx=ctx,
             ui=self.ui,
             system_prompt=self.config.system_prompt,
             max_steps=self.config.max_steps,
             stream=True,  # web chat streams token-by-token over SSE
         )
+        # keep the active conversation's history attached to the rebuilt agent
+        self.agent.messages = self.conversations.setdefault(self._active_conv, [])
+
+    # -- MCP servers (web mode) ------------------------------------------
+    def _mcp_configs(self) -> list[dict]:
+        """Configured MCP servers: from the key store, falling back to config."""
+        stored = self.keys.data.get("mcp_servers")
+        if stored is not None:
+            return stored
+        return list(self.config.mcp_servers or [])
+
+    def _reload_mcp(self) -> None:
+        from .mcp import load_mcp_tools
+
+        for s in self._mcp_servers:
+            try:
+                s.stop()
+            except Exception:  # pragma: no cover
+                pass
+        configs = self._mcp_configs()
+        if configs:
+            self._mcp_tools, self._mcp_servers = load_mcp_tools(configs, ui=self.ui)
+        else:
+            self._mcp_tools, self._mcp_servers = [], []
+        self._build_agent()
+
+    def stop_mcp(self) -> None:
+        for s in self._mcp_servers:
+            try:
+                s.stop()
+            except Exception:  # pragma: no cover
+                pass
 
     def info(self) -> dict[str, Any]:
         return {
@@ -176,28 +217,36 @@ class AgentService:
             "history": len(self.agent.messages),
         }
 
-    def chat(self, message: str) -> dict[str, Any]:
+    def _select_conv(self, conv_id: str) -> None:
+        """Point the agent at the message history for ``conv_id`` (multi-tab)."""
+        conv_id = conv_id or "default"
+        self.agent.messages = self.conversations.setdefault(conv_id, [])
+        self._active_conv = conv_id
+
+    def chat(self, message: str, images=None, conv_id: str = "default") -> dict[str, Any]:
         with self._lock:
+            self._select_conv(conv_id)
             self.ui.drain()
             try:
-                final = self.agent.run(message)
+                final = self.agent.run(message, images=images)
             except ProviderError as exc:
                 self.ui.error(str(exc))
                 final = ""
             self._accumulate_usage()
             return {"events": self.ui.drain(), "final": final, "usage": self.usage_info()}
 
-    def chat_stream(self, message: str, emit) -> None:
+    def chat_stream(self, message: str, emit, images=None, conv_id: str = "default") -> None:
         """Run a turn, delivering each event to ``emit`` as it happens.
 
         ``emit`` receives every agent/tool event live and a final
         ``{"type": "done", "final": ...}`` event when the turn completes.
         """
         with self._lock:
+            self._select_conv(conv_id)
             self.ui.drain()
             self.ui.sink = emit
             try:
-                final = self.agent.run(message)
+                final = self.agent.run(message, images=images)
             except ProviderError as exc:
                 emit({"type": "error", "text": str(exc)})
                 final = ""
@@ -252,10 +301,60 @@ class AgentService:
     def usage_info(self) -> dict[str, Any]:
         return dict(self.usage)
 
-    def reset(self) -> dict[str, Any]:
+    def reset(self, conv_id: str = "default") -> dict[str, Any]:
         with self._lock:
-            self.agent.reset()
+            self.conversations[conv_id or "default"] = []
+            self._select_conv(conv_id)
             return {"ok": True}
+
+    def close_conversation(self, conv_id: str) -> dict[str, Any]:
+        with self._lock:
+            self.conversations.pop(conv_id, None)
+            if self._active_conv == conv_id:
+                self._active_conv = "default"
+            return {"ok": True}
+
+    # -- MCP panel -------------------------------------------------------
+    def mcp_info(self) -> dict[str, Any]:
+        counts: dict[str, int] = {}
+        for t in self._mcp_tools:
+            srv = t.name.split("__", 1)[0]
+            counts[srv] = counts.get(srv, 0) + 1
+        running = {getattr(s, "name", None) for s in self._mcp_servers}
+        servers = []
+        for c in self._mcp_configs():
+            nm = c.get("name")
+            servers.append({
+                "name": nm, "command": c.get("command", ""), "args": c.get("args", []),
+                "running": nm in running, "tools": counts.get(nm, 0),
+            })
+        return {"servers": servers, "tool_total": len(self._mcp_tools)}
+
+    def mcp_add(self, name, command, args=None, env=None) -> dict[str, Any]:
+        if not name or not command:
+            raise ProviderError("MCP server needs a name and a command")
+        with self._lock:
+            configs = [c for c in self._mcp_configs() if c.get("name") != name]
+            entry = {"name": name, "command": command, "args": args or []}
+            if env:
+                entry["env"] = env
+            configs.append(entry)
+            self.keys.data["mcp_servers"] = configs
+            self.keys.save()
+            self._reload_mcp()
+            return self.mcp_info()
+
+    def mcp_remove(self, name) -> dict[str, Any]:
+        with self._lock:
+            self.keys.data["mcp_servers"] = [c for c in self._mcp_configs() if c.get("name") != name]
+            self.keys.save()
+            self._reload_mcp()
+            return self.mcp_info()
+
+    def mcp_restart(self) -> dict[str, Any]:
+        with self._lock:
+            self._reload_mcp()
+            return self.mcp_info()
 
     # -- sessions: save / load conversation history ----------------------
     @staticmethod
@@ -267,10 +366,12 @@ class AgentService:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def save_session(self, title: str | None = None, session_id: str | None = None) -> dict[str, Any]:
+    def save_session(self, title: str | None = None, session_id: str | None = None,
+                     conv_id: str = "default") -> dict[str, Any]:
         import time
 
         with self._lock:
+            self._select_conv(conv_id)
             msgs = self.agent.messages
             if not title:
                 first = next((m.content for m in msgs if m.role == "user" and m.content), "")
@@ -307,13 +408,15 @@ class AgentService:
         out.sort(key=lambda s: s["updated"], reverse=True)
         return {"sessions": out}
 
-    def load_session(self, session_id: str) -> dict[str, Any]:
+    def load_session(self, session_id: str, conv_id: str = "default") -> dict[str, Any]:
         with self._lock:
             f = self._sessions_dir() / f"{session_id}.json"
             if not f.is_file():
                 return {"ok": False, "error": "session not found"}
             d = json.loads(f.read_text("utf-8"))
-            self.agent.messages = [_msg_from_dict(m) for m in d.get("messages", [])]
+            conv_id = conv_id or "default"
+            self.conversations[conv_id] = [_msg_from_dict(m) for m in d.get("messages", [])]
+            self._select_conv(conv_id)
             return {"ok": True, "id": session_id, "title": d.get("title", ""),
                     "messages": d.get("messages", [])}
 
@@ -580,16 +683,22 @@ def _make_handler(service: AgentService):
                 self._json(200, service.usage_info())
             elif self.path == "/api/sessions":
                 self._json(200, service.list_sessions())
+            elif self.path == "/api/mcp":
+                self._json(200, service.mcp_info())
             elif self.path.startswith("/api/chat/stream"):
                 self._chat_stream()
             else:
                 self._json(404, {"error": "not found"})
 
-        def _chat_stream(self):
-            from urllib.parse import parse_qs, urlparse
-
-            qs = parse_qs(urlparse(self.path).query)
-            message = (qs.get("message") or [""])[0]
+        def _chat_stream(self, payload=None):
+            if payload is None:  # GET: read message from the query string
+                from urllib.parse import parse_qs, urlparse
+                qs = parse_qs(urlparse(self.path).query)
+                payload = {"message": (qs.get("message") or [""])[0],
+                           "conv": (qs.get("conv") or ["default"])[0]}
+            message = payload.get("message", "")
+            images = payload.get("images") or []
+            conv = payload.get("conv", "default")
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
@@ -601,17 +710,36 @@ def _make_handler(service: AgentService):
                 self.wfile.flush()
 
             try:
-                service.chat_stream(message, emit)
+                service.chat_stream(message, emit, images=images, conv_id=conv)
             except (BrokenPipeError, ConnectionResetError):  # pragma: no cover
                 pass
 
         def do_POST(self):  # noqa: N802
             try:
                 payload = self._read_json()
+                if self.path == "/api/chat/stream":
+                    self._chat_stream(payload)
+                    return
                 if self.path == "/api/chat":
-                    self._json(200, service.chat(payload.get("message", "")))
+                    self._json(200, service.chat(
+                        payload.get("message", ""),
+                        images=payload.get("images"), conv_id=payload.get("conv", "default")))
                 elif self.path == "/api/reset":
-                    self._json(200, service.reset())
+                    self._json(200, service.reset(payload.get("conv", "default")))
+                elif self.path == "/api/conversation/close":
+                    self._json(200, service.close_conversation(payload.get("conv", "")))
+                elif self.path == "/api/mcp/add":
+                    args = payload.get("args")
+                    if isinstance(args, str):
+                        import shlex
+                        args = shlex.split(args)
+                    self._json(200, service.mcp_add(
+                        payload.get("name", ""), payload.get("command", ""),
+                        args=args, env=payload.get("env")))
+                elif self.path == "/api/mcp/remove":
+                    self._json(200, service.mcp_remove(payload.get("name", "")))
+                elif self.path == "/api/mcp/restart":
+                    self._json(200, service.mcp_restart())
                 elif self.path == "/api/config":
                     self._json(200, service.configure(payload.get("provider"), payload.get("model")))
                 elif self.path == "/api/providers":
@@ -626,9 +754,11 @@ def _make_handler(service: AgentService):
                 elif self.path == "/api/providers/test":
                     self._json(200, service.test_provider(payload.get("provider", "")))
                 elif self.path == "/api/sessions/save":
-                    self._json(200, service.save_session(payload.get("title"), payload.get("id")))
+                    self._json(200, service.save_session(
+                        payload.get("title"), payload.get("id"), conv_id=payload.get("conv", "default")))
                 elif self.path == "/api/sessions/load":
-                    self._json(200, service.load_session(payload.get("id", "")))
+                    self._json(200, service.load_session(
+                        payload.get("id", ""), conv_id=payload.get("conv", "default")))
                 elif self.path == "/api/sessions/delete":
                     self._json(200, service.delete_session(payload.get("id", "")))
                 elif self.path == "/api/exec":
@@ -686,6 +816,7 @@ def serve(
         print("\nshutting down…")
     finally:
         service.server_stop()
+        service.stop_mcp()
         httpd.server_close()
 
 
@@ -770,6 +901,27 @@ INDEX_HTML = r"""<!DOCTYPE html>
         background:#0d1117;border:1px solid var(--border);border-radius:6px;padding:5px 8px;margin:8px 0}
   .usagebar b{color:var(--green)} .usagebar .bwarn{color:var(--red)}
   .sep{color:var(--border)}
+  /* conversation tabs */
+  .convtabs{display:flex;gap:4px;padding:8px 8px 0;overflow-x:auto;background:var(--bg);align-items:center}
+  .convtabs .ctab{display:flex;align-items:center;gap:6px;padding:5px 10px;border:1px solid var(--border);
+        border-bottom:0;border-radius:8px 8px 0 0;background:var(--panel);color:var(--muted);cursor:pointer;
+        white-space:nowrap;font-size:12px}
+  .convtabs .ctab.active{color:var(--text);background:#0d1117;box-shadow:inset 0 2px 0 var(--accent)}
+  .convtabs .ctab .x{color:var(--muted)} .convtabs .ctab .x:hover{color:var(--red)}
+  .convtabs .newconv{border:1px dashed var(--border);border-radius:8px;background:transparent;color:var(--muted);
+        cursor:pointer;padding:5px 10px}
+  /* image attachments */
+  .attachbar{display:flex;gap:6px;flex-wrap:wrap;padding:0 18px}
+  .attachbar .thumb{position:relative;width:48px;height:48px;border:1px solid var(--border);border-radius:6px;
+        overflow:hidden;background:#010409}
+  .attachbar .thumb img{width:100%;height:100%;object-fit:cover}
+  .attachbar .thumb .x{position:absolute;top:0;right:2px;color:#fff;cursor:pointer;text-shadow:0 0 3px #000}
+  .msg .imgs{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+  .msg .imgs img{max-width:160px;max-height:160px;border-radius:6px;border:1px solid var(--border)}
+  #attachBtn{padding:0 10px;background:#0d1117}
+  /* mcp panel */
+  .mcpadd{display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--border);padding-top:10px;margin-top:8px}
+  .mcpadd input{padding:5px 8px;font-size:12px}
   .ptest{font-size:11px;margin-top:3px;min-height:14px}
   .ptest.ok{color:var(--green)} .ptest.err{color:var(--red)} .ptest.muted{color:var(--muted)}
   .ec0{color:var(--green)} .ecN{color:var(--red)}
@@ -837,8 +989,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <div id="tools"></div>
   </aside>
   <main>
+    <div id="convTabs" class="convtabs"></div>
     <div id="log"></div>
+    <div id="attachBar" class="attachbar"></div>
     <footer>
+      <input id="fileInput" type="file" accept="image/*" multiple style="display:none"/>
+      <button id="attachBtn" title="attach image(s)">📎</button>
       <textarea id="input" placeholder="Ask the agent to do something… (Enter to send, Shift+Enter for newline)"></textarea>
       <button id="send">Send</button>
     </footer>
@@ -847,9 +1003,27 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <div class="tabs">
       <button data-tab="editor" class="active">Editor</button>
       <button data-tab="providers">Providers</button>
+      <button data-tab="mcp">MCP</button>
       <button data-tab="terminal">Terminal</button>
       <button data-tab="git">Git</button>
       <button data-tab="server">Web server</button>
+    </div>
+
+    <div class="tab" id="tab-mcp">
+      <div class="phdr">
+        <b>MCP servers</b>
+        <span class="muted">stdio Model Context Protocol servers — their tools are added to the agent</span>
+      </div>
+      <div id="mcpList" class="provlist"></div>
+      <div class="mcpadd">
+        <input id="mcpName" placeholder="name (e.g. filesystem)"/>
+        <input id="mcpCmd" placeholder="command (e.g. npx)"/>
+        <input id="mcpArgs" placeholder="args (e.g. -y @modelcontextprotocol/server-filesystem .)"/>
+        <div class="row">
+          <button id="mcpAdd">Add &amp; start</button>
+          <button id="mcpRestart">Restart all</button>
+        </div>
+      </div>
     </div>
 
     <div class="tab" id="tab-providers">
@@ -995,30 +1169,94 @@ async function loadInfo(){
     document.getElementById('tools').appendChild(x);});
 }
 
-function sendMsg(){
-  const text=input.value.trim(); if(!text) return;
-  addMsg('user', text); input.value=''; send.disabled=true;
-  const think=addThinking();
+// ---- conversation tabs (multiple concurrent chats) ----
+let convs={}, activeConv=null, convSeq=0;
+function newConv(title){ const id='c'+(++convSeq); convs[id]={title:title||('Chat '+convSeq), html:''}; return id; }
+function renderConvTabs(){
+  const bar=document.getElementById('convTabs'); bar.innerHTML='';
+  Object.keys(convs).forEach(id=>{
+    const t=el('ctab'+(id===activeConv?' active':''));
+    const nm=document.createElement('span'); nm.textContent=convs[id].title; nm.onclick=()=>switchConv(id);
+    t.appendChild(nm);
+    if(Object.keys(convs).length>1){ const x=document.createElement('span'); x.className='x'; x.textContent='×';
+      x.onclick=(e)=>{e.stopPropagation(); closeConv(id);}; t.appendChild(x); }
+    bar.appendChild(t);
+  });
+  const add=document.createElement('button'); add.className='newconv'; add.textContent='+ New chat';
+  add.onclick=()=>{ switchConv(newConv()); }; bar.appendChild(add);
+}
+function switchConv(id){
+  if(activeConv && convs[activeConv]) convs[activeConv].html=log.innerHTML;
+  activeConv=id; curStream=null; log.innerHTML=(convs[id]&&convs[id].html)||''; renderConvTabs(); scroll();
+}
+async function closeConv(id){
+  try{ await fetch('/api/conversation/close',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({conv:id})}); }catch(_){}
+  delete convs[id];
+  if(activeConv===id){ const rest=Object.keys(convs); switchConv(rest[0]||newConv()); }
+  else renderConvTabs();
+}
+
+// ---- image attachments (multimodal) ----
+let pending=[];
+function renderAttachments(){
+  const bar=document.getElementById('attachBar'); bar.innerHTML='';
+  pending.forEach((p,i)=>{ const th=el('thumb'); const im=document.createElement('img');
+    im.src='data:'+p.media_type+';base64,'+p.data; th.appendChild(im);
+    const x=document.createElement('span'); x.className='x'; x.textContent='×';
+    x.onclick=()=>{pending.splice(i,1);renderAttachments();}; th.appendChild(x); bar.appendChild(th); });
+}
+document.getElementById('attachBtn').onclick=()=>document.getElementById('fileInput').click();
+document.getElementById('fileInput').addEventListener('change',(e)=>{
+  [...e.target.files].forEach(f=>{ const r=new FileReader();
+    r.onload=()=>{ const b64=String(r.result).split(',')[1]||'';
+      pending.push({media_type:f.type||'image/png',data:b64,name:f.name}); renderAttachments(); };
+    r.readAsDataURL(f); });
+  e.target.value='';
+});
+function addUserMsg(text, imgs){
+  const d=el('msg user'); if(text) d.textContent=text;
+  if(imgs && imgs.length){ const box=el('imgs'); imgs.forEach(p=>{const im=document.createElement('img');
+    im.src='data:'+p.media_type+';base64,'+p.data; box.appendChild(im);}); d.appendChild(box); }
+  log.appendChild(d); scroll();
+}
+
+async function sendMsg(){
+  const text=input.value.trim(); if(!text && pending.length===0) return;
+  const imgs=pending.map(p=>({media_type:p.media_type,data:p.data}));
+  addUserMsg(text, pending); input.value=''; pending=[]; renderAttachments();
+  send.disabled=true; const think=addThinking();
   let sawDiff=false, gotFirst=false;
-  // Stream events live via Server-Sent Events.
-  const es=new EventSource('/api/chat/stream?message='+encodeURIComponent(text));
-  const finish=()=>{ endStream(); es.close(); send.disabled=false; input.focus();
-    if(sawDiff){ loadTree(); if(window.__edRefresh) window.__edRefresh(); } };
-  es.onmessage=(e)=>{
-    if(!gotFirst){ think.remove(); gotFirst=true; }
-    let ev; try{ ev=JSON.parse(e.data); }catch(_){ return; }
-    if(ev.type==='done'){ if(ev.usage) renderUsage(ev.usage); finish(); return; }
-    if(ev.type==='diff') sawDiff=true;
-    if(ev.type!=='thinking') addEvent(ev);
-  };
-  es.onerror=()=>{ if(!gotFirst) think.remove();
-    if(send.disabled){ addEvent({type:'error',text:'connection lost'}); }
-    finish(); };
+  try{
+    const resp=await fetch('/api/chat/stream',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:text, images:imgs, conv:activeConv})});
+    const reader=resp.body.getReader(); const dec=new TextDecoder(); let buf='';
+    for(;;){
+      const {value,done}=await reader.read(); if(done) break;
+      buf+=dec.decode(value,{stream:true});
+      let i;
+      while((i=buf.indexOf('\n\n'))>=0){
+        const frame=buf.slice(0,i); buf=buf.slice(i+2);
+        const dl=frame.split('\n').find(l=>l.startsWith('data:')); if(!dl) continue;
+        let ev; try{ ev=JSON.parse(dl.slice(5).trim()); }catch(_){ continue; }
+        if(!gotFirst){ think.remove(); gotFirst=true; }
+        if(ev.type==='done'){ if(ev.usage) renderUsage(ev.usage); break; }
+        if(ev.type==='diff') sawDiff=true;
+        if(ev.type!=='thinking') addEvent(ev);
+      }
+    }
+  }catch(e){ if(!gotFirst) think.remove(); addEvent({type:'error',text:String(e)}); }
+  endStream(); send.disabled=false; input.focus();
+  if(sawDiff){ loadTree(); if(window.__edRefresh) window.__edRefresh(); }
 }
 
 send.onclick=sendMsg;
 input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();}});
-document.getElementById('reset').onclick=async()=>{await fetch('/api/reset',{method:'POST'});log.innerHTML='';loadInfo();};
+document.getElementById('reset').onclick=async()=>{
+  await fetch('/api/reset',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({conv:activeConv})});
+  log.innerHTML=''; if(convs[activeConv]) convs[activeConv].html=''; loadInfo();
+};
 document.getElementById('apply').onclick=async()=>{
   await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({provider:document.getElementById('providerSel').value,
@@ -1037,7 +1275,7 @@ async function loadSessions(){
 function renderHistory(msgs){
   log.innerHTML='';
   (msgs||[]).forEach(m=>{
-    if(m.role==='user'){ addMsg('user', m.content); }
+    if(m.role==='user'){ addUserMsg(m.content, (m.images||[])); }
     else if(m.role==='assistant'){
       if(m.content) addMsg('assistant', m.content);
       (m.tool_calls||[]).forEach(tc=>addEvent({type:'tool_call',name:tc.name,args:tc.arguments}));
@@ -1045,18 +1283,58 @@ function renderHistory(msgs){
   });
 }
 document.getElementById('saveSession').onclick=async()=>{
-  const r=await fetch('/api/sessions/save',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  const r=await fetch('/api/sessions/save',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({conv:activeConv})});
   const d=await r.json(); await loadSessions();
   if(d.id) sessionSel.value=d.id;
+  if(d.title && convs[activeConv]){ convs[activeConv].title=d.title; renderConvTabs(); }
 };
 document.getElementById('loadSession').onclick=async()=>{
   const id=sessionSel.value; if(!id) return;
   const r=await fetch('/api/sessions/load',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({id})});
+    body:JSON.stringify({id, conv:activeConv})});
   const d=await r.json();
-  if(d.ok){ renderHistory(d.messages); }
+  if(d.ok){ renderHistory(d.messages); if(d.title && convs[activeConv]){convs[activeConv].title=d.title; renderConvTabs();} }
 };
 loadSessions();
+
+// ---- MCP panel ----
+const mcpList=document.getElementById('mcpList');
+async function loadMcp(){
+  const r=await fetch('/api/mcp'); const d=await r.json(); mcpList.innerHTML='';
+  if(!(d.servers||[]).length){ mcpList.appendChild(el('muted','No MCP servers configured. Add one below.')); }
+  (d.servers||[]).forEach(s=>{
+    const c=el('pcard'); const t=el('ptitle');
+    t.appendChild(el('pdot'+(s.running?' ok':'')));
+    const nm=document.createElement('b'); nm.textContent=s.name; t.appendChild(nm);
+    const sp=document.createElement('span'); sp.style.flex='1'; t.appendChild(sp);
+    const badge=el('badge'); badge.textContent=(s.running?'running · ':'stopped · ')+s.tools+' tools'; t.appendChild(badge);
+    c.appendChild(t);
+    const cmd=el('muted', s.command+' '+(s.args||[]).join(' ')); cmd.style.fontSize='11px'; c.appendChild(cmd);
+    const acts=el('pacts'); const rm=document.createElement('button'); rm.textContent='Remove';
+    rm.onclick=async()=>{ await fetch('/api/mcp/remove',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name:s.name})}); loadMcp(); loadInfo(); };
+    acts.appendChild(rm); c.appendChild(acts); mcpList.appendChild(c);
+  });
+}
+document.getElementById('mcpAdd').onclick=async()=>{
+  const name=document.getElementById('mcpName').value.trim();
+  const command=document.getElementById('mcpCmd').value.trim();
+  const args=document.getElementById('mcpArgs').value.trim();
+  if(!name||!command) return;
+  await fetch('/api/mcp/add',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name, command, args})});
+  document.getElementById('mcpName').value=''; document.getElementById('mcpCmd').value='';
+  document.getElementById('mcpArgs').value=''; loadMcp(); loadInfo();
+};
+document.getElementById('mcpRestart').onclick=async()=>{
+  await fetch('/api/mcp/restart',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); loadMcp(); loadInfo();
+};
+const mcpTabBtn=document.querySelector('.tabs button[data-tab="mcp"]');
+if(mcpTabBtn) mcpTabBtn.addEventListener('click', loadMcp);
+
+// start with one conversation
+switchConv(newConv('Chat 1'));
 
 // ---- tabs ----
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
