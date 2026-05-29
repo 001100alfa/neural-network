@@ -1,13 +1,22 @@
 name: Release
 
-# Build the package and a portable zip, then publish a GitHub Release whenever
-# a version tag (vX.Y.Z) is pushed. Uses no marketplace actions (the repo's
-# policy requires actions pinned to a full SHA): plain git + the runner's
-# preinstalled Python and `gh` CLI.
+# Build the package + a portable zip and publish a GitHub Release.
+# Two ways to trigger:
+#   • push a version tag (vX.Y.Z), or
+#   • run it manually from the Actions tab ("Run workflow") and type the version
+#     — handy when tag pushes aren't available.
+# Uses no marketplace actions (the repo's policy requires actions pinned to a
+# full SHA): plain git + the runner's preinstalled Python and `gh` CLI.
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag to release (e.g. v0.1.0)"
+        required: true
+        default: "v0.1.0"
 
 permissions:
   contents: write
@@ -16,7 +25,15 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out the tag (plain git)
+      - name: Resolve version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "VERSION=${{ github.event.inputs.version }}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Check out the ref (plain git)
         run: |
           git init -q .
           git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
@@ -32,13 +49,14 @@ jobs:
       - name: Portable zip (run straight from the folder, no install)
         run: |
           mkdir -p dist
-          git archive --format=zip --prefix="aio-${GITHUB_REF_NAME}/" \
-            -o "dist/aio-portable-${GITHUB_REF_NAME}.zip" HEAD
+          git archive --format=zip --prefix="aio-${VERSION}/" \
+            -o "dist/aio-portable-${VERSION}.zip" HEAD
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" dist/* \
-            --title "AIO ${GITHUB_REF_NAME}" \
+          gh release create "${VERSION}" dist/* \
+            --target "${GITHUB_SHA}" \
+            --title "AIO ${VERSION}" \
             --generate-notes
