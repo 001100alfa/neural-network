@@ -144,6 +144,22 @@ MCP_CATALOG: list[dict[str, Any]] = [
      "env_hint": "NOTION_TOKEN"},
     {"name": "docker", "desc": "Manage Docker containers & images",
      "command": "uvx", "args": ["docker-mcp"]},
+    {"name": "puppeteer", "desc": "Browser automation & screenshots (Puppeteer)",
+     "command": "npx", "args": ["-y", "@modelcontextprotocol/server-puppeteer"]},
+    {"name": "google-drive", "desc": "Search & read Google Drive files (OAuth setup)",
+     "command": "npx", "args": ["-y", "@modelcontextprotocol/server-gdrive"]},
+    {"name": "redis", "desc": "Read/write a Redis instance",
+     "command": "npx", "args": ["-y", "@modelcontextprotocol/server-redis", "redis://localhost:6379"]},
+    {"name": "kubernetes", "desc": "Inspect & manage a Kubernetes cluster",
+     "command": "npx", "args": ["-y", "mcp-server-kubernetes"]},
+    {"name": "mongodb", "desc": "Query a MongoDB database",
+     "command": "npx", "args": ["-y", "mongodb-mcp-server"],
+     "env_hint": "MDB_MCP_CONNECTION_STRING"},
+    {"name": "obsidian", "desc": "Read/search an Obsidian vault",
+     "command": "uvx", "args": ["mcp-obsidian"], "env_hint": "OBSIDIAN_API_KEY"},
+    {"name": "figma", "desc": "Read Figma designs/components",
+     "command": "npx", "args": ["-y", "figma-developer-mcp", "--stdio"],
+     "env_hint": "FIGMA_API_KEY"},
 ]
 
 # Servers configured out of the box (when nothing else is set): the coding /
@@ -1239,6 +1255,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       </div>
       <div class="mcpcathdr">Open-source servers for coding &amp; project work
         <span class="muted">— "Use" fills the form (edit path/token, then Add)</span></div>
+      <input id="mcpCatFilter" placeholder="filter catalog…" style="margin-bottom:6px"/>
       <div id="mcpCatalog" class="provlist"></div>
     </div>
 
@@ -1657,10 +1674,18 @@ async function loadMcp(){
       body:JSON.stringify({name:s.name})}); loadMcp(); loadInfo(); };
     acts.appendChild(rm); c.appendChild(acts); mcpList.appendChild(c);
   });
-  renderCatalog(d.catalog||[]);
+  mcpCatalogAll=d.catalog||[]; applyCatFilter();
 }
+let mcpCatalogAll=[];
+function applyCatFilter(){
+  const q=(document.getElementById('mcpCatFilter').value||'').toLowerCase().trim();
+  const list=q ? mcpCatalogAll.filter(s=>(s.name+' '+(s.desc||'')).toLowerCase().includes(q)) : mcpCatalogAll;
+  renderCatalog(list);
+}
+document.getElementById('mcpCatFilter').addEventListener('input', applyCatFilter);
 function renderCatalog(cat){
   const box=document.getElementById('mcpCatalog'); box.innerHTML='';
+  if(!cat.length){ box.appendChild(el('muted','no servers match the filter')); return; }
   cat.forEach(s=>{
     const row=el('mcat'); const info=el('info');
     const title=document.createElement('div');
