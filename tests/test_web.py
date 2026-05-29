@@ -185,6 +185,14 @@ def test_mcp_catalog_extra_servers(tmp_path, monkeypatch):
     assert "env_hint" not in cat["docker"]  # docker needs no token
 
 
+def test_mcp_catalog_more_servers(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    names = {c["name"] for c in svc.mcp_info()["catalog"]}
+    assert {"puppeteer", "google-drive", "redis", "kubernetes",
+            "mongodb", "obsidian", "figma"} <= names
+    assert len(names) >= 24
+
+
 def test_mcp_add_with_env_persists(tmp_path, monkeypatch):
     import json
 
