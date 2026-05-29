@@ -50,24 +50,31 @@ class AnthropicProvider(Provider):
     @staticmethod
     def _convert_messages(messages: list[Message]) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
+        # Anthropic requires roles to alternate, so all tool results that follow
+        # an assistant turn (one per tool call) must be merged into a SINGLE
+        # user message containing multiple tool_result blocks.
+        pending_results: list[dict[str, Any]] = []
+
+        def flush_results() -> None:
+            if pending_results:
+                out.append({"role": "user", "content": list(pending_results)})
+                pending_results.clear()
+
         for m in messages:
             if m.role == "system":
                 # handled via top-level "system" field; skip here
                 continue
             if m.role == "tool":
-                out.append(
+                pending_results.append(
                     {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": m.tool_call_id,
-                                "content": m.content,
-                            }
-                        ],
+                        "type": "tool_result",
+                        "tool_use_id": m.tool_call_id,
+                        "content": m.content,
                     }
                 )
                 continue
+            # any non-tool message closes the current batch of tool results
+            flush_results()
             if m.role == "assistant":
                 blocks: list[dict[str, Any]] = []
                 if m.content:
@@ -82,9 +89,10 @@ class AnthropicProvider(Provider):
                         }
                     )
                 out.append({"role": "assistant", "content": blocks or ""})
-                continue
-            # user
-            out.append({"role": "user", "content": m.content})
+            else:  # user
+                out.append({"role": "user", "content": m.content})
+
+        flush_results()
         return out
 
     def _parse_response(self, data: dict[str, Any]) -> AssistantTurn:

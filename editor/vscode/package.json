@@ -1,0 +1,53 @@
+{
+  "name": "aio-coding-agent",
+  "displayName": "AIO Coding Agent",
+  "description": "Drive the AIO all-in-one coding agent (Anthropic / OpenAI / OpenRouter / Ollama) from inside VS Code.",
+  "version": "0.1.0",
+  "publisher": "aio",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Machine Learning", "Programming Languages", "Other"],
+  "activationEvents": [],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "aio.ask",
+        "title": "AIO: Ask the agent…"
+      },
+      {
+        "command": "aio.askSelection",
+        "title": "AIO: Ask about the selection"
+      },
+      {
+        "command": "aio.openDashboard",
+        "title": "AIO: Open web dashboard"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        { "command": "aio.askSelection", "group": "navigation@9" }
+      ]
+    },
+    "configuration": {
+      "title": "AIO Coding Agent",
+      "properties": {
+        "aio.command": {
+          "type": "string",
+          "default": "aio",
+          "description": "The aio executable to invoke."
+        },
+        "aio.provider": {
+          "type": "string",
+          "enum": ["", "anthropic", "openai", "openrouter", "ollama"],
+          "default": "",
+          "description": "Provider to pass to aio (blank = auto-detect)."
+        },
+        "aio.dashboardPort": {
+          "type": "number",
+          "default": 8765,
+          "description": "Port used by the AIO web dashboard."
+        }
+      }
+    }
+  }
+}

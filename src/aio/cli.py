@@ -42,6 +42,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-steps", type=int, help="Max agent steps per turn.")
     p.add_argument("--no-color", action="store_true", help="Disable coloured output.")
     p.add_argument("--no-mcp", action="store_true", help="Do not start configured MCP servers.")
+    p.add_argument("--web", action="store_true", help="Launch the browser dashboard instead of the CLI.")
+    p.add_argument("--host", default="127.0.0.1", help="Web dashboard host (default 127.0.0.1).")
+    p.add_argument("--port", type=int, default=8765, help="Web dashboard port (default 8765).")
     p.add_argument("--list-tools", action="store_true", help="List tools and exit.")
     p.add_argument("--version", action="version", version=f"aio {__version__}")
     return p
@@ -170,6 +173,12 @@ def main(argv: list[str] | None = None) -> int:
         registry = default_registry()
         for t in registry:
             print(f"{t.name:<16} {t.description.splitlines()[0]}")
+        return 0
+
+    if args.web:
+        from .web import serve
+
+        serve(config, host=args.host, port=args.port)
         return 0
 
     agent, mcp_servers = _make_agent(config, ui, no_mcp=args.no_mcp)

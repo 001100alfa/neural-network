@@ -44,6 +44,33 @@ def test_anthropic_payload_shape():
     assert tool_msg["content"][0]["tool_use_id"] == "c1"
 
 
+def test_anthropic_merges_parallel_tool_results():
+    """Anthropic requires alternating roles: multiple tool results following one
+    assistant turn must merge into a SINGLE user message."""
+    convo = [
+        Message(role="user", content="do two things"),
+        Message(
+            role="assistant",
+            content="working",
+            tool_calls=[
+                ToolCall(id="a", name="read_file", arguments={"path": "x"}),
+                ToolCall(id="b", name="read_file", arguments={"path": "y"}),
+            ],
+        ),
+        Message(role="tool", content="content x", tool_call_id="a", name="read_file"),
+        Message(role="tool", content="content y", tool_call_id="b", name="read_file"),
+    ]
+    p = AnthropicProvider(model="claude-x", api_key="k")
+    _, _, body = p._build_payload(convo, TOOLS, system=None)
+    roles = [m["role"] for m in body["messages"]]
+    # roles must strictly alternate
+    assert roles == ["user", "assistant", "user"], roles
+    # the final user message carries BOTH tool_result blocks
+    results = body["messages"][-1]["content"]
+    assert [b["type"] for b in results] == ["tool_result", "tool_result"]
+    assert {b["tool_use_id"] for b in results} == {"a", "b"}
+
+
 def test_anthropic_parse():
     p = AnthropicProvider(model="claude-x", api_key="k")
     data = {
