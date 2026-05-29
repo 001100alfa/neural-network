@@ -25,7 +25,7 @@ from typing import Any
 from .agent import Agent
 from .config import PROVIDER_DEFAULTS, Config, KeyStore
 from .pricing import estimate_cost
-from .providers import ProviderError, build_provider
+from .providers import Message, ProviderError, ToolCall, build_provider
 from .tools import ToolContext, ToolError, default_registry
 
 
@@ -74,6 +74,10 @@ class EventUI:
     def assistant(self, text: str) -> None:
         self._emit({"type": "assistant", "text": text})
 
+    def token(self, delta: str) -> None:
+        if delta:
+            self._emit({"type": "token", "text": delta})
+
     def tool_call(self, name: str, args: dict) -> None:
         self._emit({"type": "tool_call", "name": name, "args": args})
 
@@ -95,6 +99,29 @@ class EventUI:
         # No interactive prompt available over HTTP; auto-approve.
         self.tool_call(name, args)
         return "yes"
+
+
+def _msg_to_dict(m: Message) -> dict[str, Any]:
+    return {
+        "role": m.role,
+        "content": m.content,
+        "tool_calls": [{"id": c.id, "name": c.name, "arguments": c.arguments} for c in m.tool_calls],
+        "tool_call_id": m.tool_call_id,
+        "name": m.name,
+    }
+
+
+def _msg_from_dict(d: dict[str, Any]) -> Message:
+    return Message(
+        role=d.get("role", "user"),
+        content=d.get("content", "") or "",
+        tool_calls=[
+            ToolCall(id=c.get("id", ""), name=c.get("name", ""), arguments=c.get("arguments", {}) or {})
+            for c in d.get("tool_calls", []) or []
+        ],
+        tool_call_id=d.get("tool_call_id"),
+        name=d.get("name"),
+    )
 
 
 class AgentService:
@@ -134,6 +161,7 @@ class AgentService:
             ui=self.ui,
             system_prompt=self.config.system_prompt,
             max_steps=self.config.max_steps,
+            stream=True,  # web chat streams token-by-token over SSE
         )
 
     def info(self) -> dict[str, Any]:
@@ -200,6 +228,26 @@ class AgentService:
         bp["input_tokens"] += inp
         bp["output_tokens"] += out
         bp["est_cost_usd"] = round(bp["est_cost_usd"] + cost, 6)
+        # persist monthly spend for budget tracking
+        self.keys.record_spend(provider, self._month(), cost, inp, out, reqs)
+        self.usage["budget_warning"] = self._budget_warning(provider)
+
+    @staticmethod
+    def _month() -> str:
+        import time
+        return time.strftime("%Y-%m")
+
+    def _budget_warning(self, provider: str) -> str:
+        budget = self.keys.get_budget(provider)
+        if budget <= 0:
+            return ""
+        spent = self.keys.monthly(provider, self._month()).get("spent_usd", 0.0)
+        label = PROVIDER_DEFAULTS[provider]["label"]
+        if spent >= budget:
+            return f"{label}: monthly budget exceeded (${spent:.4f} / ${budget:.2f})"
+        if spent >= 0.8 * budget:
+            return f"{label}: nearing monthly budget (${spent:.4f} / ${budget:.2f})"
+        return ""
 
     def usage_info(self) -> dict[str, Any]:
         return dict(self.usage)
@@ -208,6 +256,72 @@ class AgentService:
         with self._lock:
             self.agent.reset()
             return {"ok": True}
+
+    # -- sessions: save / load conversation history ----------------------
+    @staticmethod
+    def _sessions_dir():
+        from pathlib import Path
+
+        env = os.environ.get("AIO_SESSIONS_DIR")
+        d = Path(env) if env else (Path.home() / ".config" / "aio" / "sessions")
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def save_session(self, title: str | None = None, session_id: str | None = None) -> dict[str, Any]:
+        import time
+
+        with self._lock:
+            msgs = self.agent.messages
+            if not title:
+                first = next((m.content for m in msgs if m.role == "user" and m.content), "")
+                title = (first[:48] + "…") if len(first) > 48 else (first or "session")
+            sid = session_id or f"{int(time.time() * 1000):x}"
+            payload = {
+                "id": sid,
+                "title": title,
+                "provider": self.config.provider,
+                "model": self.config.active.model,
+                "updated": time.time(),
+                "messages": [_msg_to_dict(m) for m in msgs],
+            }
+            (self._sessions_dir() / f"{sid}.json").write_text(
+                json.dumps(payload, indent=2), encoding="utf-8"
+            )
+            return {"ok": True, "id": sid, "title": title, "count": len(msgs)}
+
+    def list_sessions(self) -> dict[str, Any]:
+        out = []
+        for f in self._sessions_dir().glob("*.json"):
+            try:
+                d = json.loads(f.read_text("utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            out.append({
+                "id": d.get("id", f.stem),
+                "title": d.get("title", f.stem),
+                "provider": d.get("provider", ""),
+                "model": d.get("model", ""),
+                "updated": d.get("updated", f.stat().st_mtime),
+                "count": len(d.get("messages", [])),
+            })
+        out.sort(key=lambda s: s["updated"], reverse=True)
+        return {"sessions": out}
+
+    def load_session(self, session_id: str) -> dict[str, Any]:
+        with self._lock:
+            f = self._sessions_dir() / f"{session_id}.json"
+            if not f.is_file():
+                return {"ok": False, "error": "session not found"}
+            d = json.loads(f.read_text("utf-8"))
+            self.agent.messages = [_msg_from_dict(m) for m in d.get("messages", [])]
+            return {"ok": True, "id": session_id, "title": d.get("title", ""),
+                    "messages": d.get("messages", [])}
+
+    def delete_session(self, session_id: str) -> dict[str, Any]:
+        f = self._sessions_dir() / f"{session_id}.json"
+        if f.is_file():
+            f.unlink()
+        return {"ok": True}
 
     def configure(self, provider: str | None, model: str | None) -> dict[str, Any]:
         with self._lock:
@@ -232,11 +346,14 @@ class AgentService:
     def providers_info(self) -> dict[str, Any]:
         """List every provider with masked key + configuration (never the raw key)."""
         out = []
+        month = self._month()
         for name, d in PROVIDER_DEFAULTS.items():
             pc = self.config.providers[name]
             env_set = bool(d["env"] and os.environ.get(d["env"]))
             stored = bool(self.keys.get(name).get("api_key"))
             needs_key = d["env"] is not None
+            budget = self.keys.get_budget(name)
+            spent = self.keys.monthly(name, month).get("spent_usd", 0.0)
             out.append(
                 {
                     "name": name,
@@ -249,6 +366,10 @@ class AgentService:
                     "configured": (not needs_key) or bool(pc.api_key),
                     "source": "stored" if stored else ("env" if env_set else ""),
                     "active": name == self.config.provider,
+                    "budget_usd": budget,
+                    "month_spent_usd": round(spent, 6),
+                    "over_budget": bool(budget > 0 and spent >= budget),
+                    "near_budget": bool(budget > 0 and 0.8 * budget <= spent < budget),
                 }
             )
         return {"active": self.config.provider, "providers": out, "usage": self.usage_info()}
@@ -279,11 +400,14 @@ class AgentService:
         model: str | None = None,
         base_url: str | None = None,
         make_active: bool = False,
+        budget: float | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             if name not in PROVIDER_DEFAULTS:
                 raise ProviderError(f"unknown provider '{name}'")
             self.keys.set(name, api_key=api_key, model=model, base_url=base_url)
+            if budget is not None:
+                self.keys.set_budget(name, budget)
             # reflect immediately on the live config
             pc = self.config.providers[name]
             if api_key is not None:
@@ -454,6 +578,8 @@ def _make_handler(service: AgentService):
                 self._json(200, service.providers_info())
             elif self.path == "/api/usage":
                 self._json(200, service.usage_info())
+            elif self.path == "/api/sessions":
+                self._json(200, service.list_sessions())
             elif self.path.startswith("/api/chat/stream"):
                 self._chat_stream()
             else:
@@ -495,9 +621,16 @@ def _make_handler(service: AgentService):
                         model=payload.get("model"),
                         base_url=payload.get("base_url"),
                         make_active=bool(payload.get("make_active")),
+                        budget=payload.get("budget"),
                     ))
                 elif self.path == "/api/providers/test":
                     self._json(200, service.test_provider(payload.get("provider", "")))
+                elif self.path == "/api/sessions/save":
+                    self._json(200, service.save_session(payload.get("title"), payload.get("id")))
+                elif self.path == "/api/sessions/load":
+                    self._json(200, service.load_session(payload.get("id", "")))
+                elif self.path == "/api/sessions/delete":
+                    self._json(200, service.delete_session(payload.get("id", "")))
                 elif self.path == "/api/exec":
                     self._json(200, service.exec_command(
                         payload.get("command", ""), payload.get("shell", "bash")))
@@ -635,7 +768,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .padv-body{display:none} .padv-body.on{display:block}
   .usagebar{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--text);
         background:#0d1117;border:1px solid var(--border);border-radius:6px;padding:5px 8px;margin:8px 0}
-  .usagebar b{color:var(--green)}
+  .usagebar b{color:var(--green)} .usagebar .bwarn{color:var(--red)}
+  .sep{color:var(--border)}
   .ptest{font-size:11px;margin-top:3px;min-height:14px}
   .ptest.ok{color:var(--green)} .ptest.err{color:var(--red)} .ptest.muted{color:var(--muted)}
   .ec0{color:var(--green)} .ecN{color:var(--red)}
@@ -682,11 +816,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
   <div class="badges">
     <span><span class="dot"></span><span id="provider">…</span> / <span id="model">…</span></span>
     <select id="providerSel" title="switch provider">
-      <option>anthropic</option><option>openai</option>
-      <option>openrouter</option><option>ollama</option>
+      <option>anthropic</option><option>openai</option><option>google</option>
+      <option>groq</option><option>mistral</option><option>deepseek</option>
+      <option>xai</option><option>together</option><option>openrouter</option><option>ollama</option>
     </select>
-    <input id="modelInput" placeholder="model name" size="18"/>
+    <input id="modelInput" placeholder="model name" size="16"/>
     <button id="apply">Apply</button>
+    <span class="sep">·</span>
+    <button id="saveSession" title="save this conversation">Save chat</button>
+    <select id="sessionSel" title="saved sessions"><option value="">sessions…</option></select>
+    <button id="loadSession">Load</button>
     <button id="reset">Clear</button>
   </div>
 </header>
@@ -805,9 +944,19 @@ function scroll(){log.scrollTop = log.scrollHeight;}
 function addMsg(role, text){ if(!text) return; const d=el('msg '+role, text); log.appendChild(d); scroll(); }
 function addThinking(t){ const d=el('thinking', t||'thinking…'); log.appendChild(d); scroll(); return d; }
 
+// streaming: build the assistant bubble token-by-token
+let curStream=null;
+function appendToken(t){
+  if(!curStream){ curStream=el('msg assistant'); curStream.textContent=''; log.appendChild(curStream); }
+  curStream.textContent += t; scroll();
+}
+function endStream(){ curStream=null; }
+
 function addEvent(ev){
-  if(ev.type==='assistant'){ addMsg('assistant', ev.text); return; }
   if(ev.type==='thinking'){ return; }
+  if(ev.type==='token'){ appendToken(ev.text); return; }
+  endStream();  // any non-token event finalises the streamed bubble
+  if(ev.type==='assistant'){ addMsg('assistant', ev.text); return; }
   if(ev.type==='tool_call'){
     const wrap=el('event'); wrap.appendChild(Object.assign(el('head'),
       {textContent:'⚙ '+ev.name+'('+Object.entries(ev.args||{}).map(([k,v])=>k+'='+short(v)).join(', ')+')'}));
@@ -853,7 +1002,7 @@ function sendMsg(){
   let sawDiff=false, gotFirst=false;
   // Stream events live via Server-Sent Events.
   const es=new EventSource('/api/chat/stream?message='+encodeURIComponent(text));
-  const finish=()=>{ es.close(); send.disabled=false; input.focus();
+  const finish=()=>{ endStream(); es.close(); send.disabled=false; input.focus();
     if(sawDiff){ loadTree(); if(window.__edRefresh) window.__edRefresh(); } };
   es.onmessage=(e)=>{
     if(!gotFirst){ think.remove(); gotFirst=true; }
@@ -876,6 +1025,38 @@ document.getElementById('apply').onclick=async()=>{
       model:document.getElementById('modelInput').value})});
   loadInfo();
 };
+
+// ---- sessions: save / load conversation history ----
+const sessionSel=document.getElementById('sessionSel');
+async function loadSessions(){
+  const r=await fetch('/api/sessions'); const d=await r.json();
+  sessionSel.innerHTML='<option value="">sessions… ('+(d.sessions||[]).length+')</option>';
+  (d.sessions||[]).forEach(s=>{const o=document.createElement('option');o.value=s.id;
+    o.textContent=s.title+' · '+s.count+' msg'; sessionSel.appendChild(o);});
+}
+function renderHistory(msgs){
+  log.innerHTML='';
+  (msgs||[]).forEach(m=>{
+    if(m.role==='user'){ addMsg('user', m.content); }
+    else if(m.role==='assistant'){
+      if(m.content) addMsg('assistant', m.content);
+      (m.tool_calls||[]).forEach(tc=>addEvent({type:'tool_call',name:tc.name,args:tc.arguments}));
+    } else if(m.role==='tool'){ addEvent({type:'tool_result',text:m.content}); }
+  });
+}
+document.getElementById('saveSession').onclick=async()=>{
+  const r=await fetch('/api/sessions/save',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  const d=await r.json(); await loadSessions();
+  if(d.id) sessionSel.value=d.id;
+};
+document.getElementById('loadSession').onclick=async()=>{
+  const id=sessionSel.value; if(!id) return;
+  const r=await fetch('/api/sessions/load',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id})});
+  const d=await r.json();
+  if(d.ok){ renderHistory(d.messages); }
+};
+loadSessions();
 
 // ---- tabs ----
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
@@ -1149,8 +1330,10 @@ function fmt(n){ return (n||0).toLocaleString(); }
 function renderUsage(u){
   if(!u){ return; }
   const cost = u.cost_known ? ('$'+(u.est_cost_usd||0).toFixed(4)) : ('~$'+(u.est_cost_usd||0).toFixed(4)+' (partial)');
-  usageBar.innerHTML='usage — requests <b>'+fmt(u.requests)+'</b> · in <b>'+fmt(u.input_tokens)
+  let html='usage — requests <b>'+fmt(u.requests)+'</b> · in <b>'+fmt(u.input_tokens)
     +'</b> tok · out <b>'+fmt(u.output_tokens)+'</b> tok · est. cost <b>'+cost+'</b>';
+  if(u.budget_warning){ html+='<br><span class="bwarn">⚠ '+u.budget_warning+'</span>'; }
+  usageBar.innerHTML=html;
 }
 async function refreshUsage(){ try{ const r=await fetch('/api/usage'); renderUsage(await r.json()); }catch(_){} }
 async function loadProviders(){
@@ -1189,24 +1372,39 @@ function provCard(p){
   adv.onclick=()=>{const on=advBody.classList.toggle('on'); adv.textContent=(on?'▾':'▸')+' advanced (base URL)';};
   card.appendChild(adv); card.appendChild(advBody);
 
+  // monthly budget + spend
+  const budgetInput=document.createElement('input'); budgetInput.type='number';
+  budgetInput.step='0.01'; budgetInput.min='0';
+  budgetInput.value = p.budget_usd ? p.budget_usd : '';
+  budgetInput.placeholder='monthly budget $ (0 = none)';
+  card.appendChild(budgetInput);
+  if(p.budget_usd>0 || p.month_spent_usd>0){
+    const spent=el('ptest '+(p.over_budget?'err':(p.near_budget?'err':'muted')));
+    spent.textContent = p.budget_usd>0
+      ? ('this month: $'+(p.month_spent_usd||0).toFixed(4)+' / $'+p.budget_usd.toFixed(2)
+          +(p.over_budget?'  ⚠ over budget':(p.near_budget?'  ⚠ nearing':'')))
+      : ('this month: $'+(p.month_spent_usd||0).toFixed(4));
+    card.appendChild(spent);
+  }
+
   const status=el('ptest muted',''); card.appendChild(status);
 
   const acts=el('pacts');
   const testBtn=document.createElement('button'); testBtn.textContent='Test';
-  testBtn.onclick=()=>testProvider(p.name, keyInput, modelInput, baseInput, dl, status, testBtn);
+  testBtn.onclick=()=>testProvider(p.name, keyInput, modelInput, baseInput, budgetInput, dl, status, testBtn);
   const saveBtn=document.createElement('button'); saveBtn.textContent='Save';
-  saveBtn.onclick=()=>saveProvider(p.name, keyInput, modelInput, baseInput, false);
+  saveBtn.onclick=()=>saveProvider(p.name, keyInput, modelInput, baseInput, budgetInput, false);
   const useBtn=document.createElement('button'); useBtn.textContent=p.active?'In use':'Use';
   useBtn.disabled=!!p.active;
-  useBtn.onclick=()=>saveProvider(p.name, keyInput, modelInput, baseInput, true);
+  useBtn.onclick=()=>saveProvider(p.name, keyInput, modelInput, baseInput, budgetInput, true);
   acts.appendChild(testBtn); acts.appendChild(saveBtn); acts.appendChild(useBtn);
   card.appendChild(acts);
   return card;
 }
-async function testProvider(name, keyInput, modelInput, baseInput, dl, status, btn){
+async function testProvider(name, keyInput, modelInput, baseInput, budgetInput, dl, status, btn){
   // Persist any typed key/base first so the test uses current values.
   if((keyInput && keyInput.value) || (baseInput && baseInput.value)){
-    await saveProviderQuiet(name, keyInput, modelInput, baseInput);
+    await saveProviderQuiet(name, keyInput, modelInput, baseInput, budgetInput);
   }
   status.className='ptest muted'; status.textContent='testing…'; btn.disabled=true;
   try{
@@ -1222,16 +1420,20 @@ async function testProvider(name, keyInput, modelInput, baseInput, dl, status, b
   }catch(e){ status.className='ptest err'; status.textContent='✗ '+e; }
   btn.disabled=false;
 }
-async function saveProviderQuiet(name, keyInput, modelInput, baseInput){
+function provBody(name, keyInput, modelInput, baseInput, budgetInput, makeActive){
   const body={provider:name, model:modelInput.value, base_url:baseInput.value};
   if(keyInput && keyInput.value) body.api_key=keyInput.value;
-  await fetch('/api/providers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(budgetInput && budgetInput.value!=='') body.budget=parseFloat(budgetInput.value)||0;
+  if(makeActive) body.make_active=true;
+  return body;
 }
-async function saveProvider(name, keyInput, modelInput, baseInput, makeActive){
-  const body={provider:name, model:modelInput.value, base_url:baseInput.value, make_active:makeActive};
-  if(keyInput && keyInput.value) body.api_key=keyInput.value;
+async function saveProviderQuiet(name, keyInput, modelInput, baseInput, budgetInput){
   await fetch('/api/providers',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify(body)});
+    body:JSON.stringify(provBody(name, keyInput, modelInput, baseInput, budgetInput, false))});
+}
+async function saveProvider(name, keyInput, modelInput, baseInput, budgetInput, makeActive){
+  await fetch('/api/providers',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(provBody(name, keyInput, modelInput, baseInput, budgetInput, makeActive))});
   await loadProviders();
   loadInfo();
 }

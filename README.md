@@ -145,9 +145,12 @@ aio --web --port 8765
 A single-page dashboard (served by the Python stdlib — no JS build step, no
 extra dependencies) that drives the same agent:
 
-- chat with the agent and watch each step **stream in live (Server-Sent
-  Events)**: assistant messages, tool calls, tool results, and **colour-coded
-  diffs** appear as they happen
+- chat with the agent and watch it **stream live, token-by-token (Server-Sent
+  Events)**: the reply types out word-by-word, and tool calls, tool results and
+  **colour-coded diffs** appear as they happen
+- **save / load conversations** — "Save chat" stores the session to disk
+  (`~/.config/aio/sessions/`, `AIO_SESSIONS_DIR` to override); pick any saved
+  session from the dropdown to reload its full history
 - sidebar listing the available tools and the working directory
 - switch **provider/model** on the fly and clear the conversation
 - a **Providers tab** — a panel for all **10 AI providers**: enter/replace API
@@ -157,7 +160,9 @@ extra dependencies) that drives the same agent:
   (`AIO_KEYS_FILE` to override). Each card has a **Test connection** button that
   validates the key and **fetches the provider's live model list** (offered as
   autocomplete on the model field). A **usage / cost indicator** shows session
-  requests, input/output tokens and an estimated USD cost.
+  requests, input/output tokens and an estimated USD cost. Each provider also
+  takes an optional **monthly budget ($)** — the card shows month-to-date spend
+  and warns when nearing or over the cap.
 - a **tools panel** with these tabs that work independently of the model:
   - **Editor** — an in-browser IDE: file tree, **multi-file tabs** (with
     unsaved-change indicators), **line numbers**, in-editor **find & replace**
@@ -174,7 +179,8 @@ extra dependencies) that drives the same agent:
     directory (handy for previewing built sites), with a clickable link
 - small JSON API: `GET /api/info`, `GET|POST /api/providers`,
   `POST /api/providers/test`, `GET /api/usage`, `POST /api/chat`,
-  `GET /api/chat/stream` (SSE), `POST /api/reset`, `POST /api/config`,
+  `GET /api/chat/stream` (SSE), `GET /api/sessions`,
+  `POST /api/sessions/{save,load,delete}`, `POST /api/reset`, `POST /api/config`,
   `POST /api/exec`, `POST /api/git`, `POST /api/server`,
   `POST /api/fs/{tree,read,write}`
 

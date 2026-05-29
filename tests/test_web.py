@@ -4,18 +4,79 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aio.providers import AssistantTurn, ToolCall
+from aio.providers import AssistantTurn, Message, ToolCall
 from aio.web import AgentService, EventUI
 
 
 def _service(tmp_path: Path, monkeypatch) -> AgentService:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    # Isolate the API-key store so tests never touch the real ~/.config file.
+    # Isolate the key store and sessions dir so tests never touch ~/.config.
     monkeypatch.setenv("AIO_KEYS_FILE", str(tmp_path / "keys.json"))
+    monkeypatch.setenv("AIO_SESSIONS_DIR", str(tmp_path / "sessions"))
     from aio.config import load_config
 
     cfg = load_config(workdir=tmp_path, overrides={"provider": "anthropic"})
     return AgentService(cfg)
+
+
+class _Tok:
+    """Streaming fake provider that yields tokens then a final turn."""
+
+    def stream_chat(self, messages, tools=None, system=None, on_delta=None):
+        for t in ["Hel", "lo ", "world"]:
+            on_delta(t)
+        return AssistantTurn(content="Hello world", usage={"input_tokens": 3, "output_tokens": 2})
+
+
+def test_chat_stream_emits_tokens_not_full_text(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    svc.agent.provider = _Tok()  # web agent has stream=True
+    events = []
+    svc.chat_stream("hi", events.append)
+    toks = [e["text"] for e in events if e["type"] == "token"]
+    assert toks == ["Hel", "lo ", "world"]
+    assert not any(e["type"] == "assistant" for e in events)  # no duplicate full bubble
+    assert events[-1]["type"] == "done"
+
+
+def test_sessions_save_list_load_delete(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    svc.agent.messages = [
+        Message(role="user", content="hello there"),
+        Message(role="assistant", content="hi!"),
+    ]
+    saved = svc.save_session()
+    assert saved["ok"] and saved["count"] == 2 and "hello there" in saved["title"]
+
+    assert any(s["id"] == saved["id"] for s in svc.list_sessions()["sessions"])
+
+    svc.agent.messages = []  # wipe, then restore from disk
+    loaded = svc.load_session(saved["id"])
+    assert loaded["ok"] and len(loaded["messages"]) == 2
+    assert len(svc.agent.messages) == 2 and svc.agent.messages[0].content == "hello there"
+
+    svc.delete_session(saved["id"])
+    assert all(s["id"] != saved["id"] for s in svc.list_sessions()["sessions"])
+
+
+def test_monthly_budget_warning(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)  # active anthropic, sonnet (priced)
+    svc.set_provider_key("anthropic", budget=0.001)  # tiny monthly cap
+
+    class BigUsage:
+        def chat(self, messages, tools=None, system=None):
+            return AssistantTurn(content="x", usage={"input_tokens": 100_000, "output_tokens": 100_000})
+
+    svc.agent.provider = BigUsage()
+    out = svc.chat("hi")  # ~ $1.80 spend >> $0.001 budget
+    assert out["usage"]["budget_warning"]
+    a = next(p for p in svc.providers_info()["providers"] if p["name"] == "anthropic")
+    assert a["budget_usd"] == 0.001 and a["over_budget"] is True and a["month_spent_usd"] > 0
+
+
+def test_import_message_tool_call():
+    # the Message import is wired (used by sessions)
+    assert Message and ToolCall
 
 
 def test_providers_panel_lists_ten(tmp_path, monkeypatch):
