@@ -10,14 +10,20 @@ $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
 $env:PYTHONPATH = Join-Path $PSScriptRoot "src"
 
-# Locate Python: prefer the 'py' launcher, then 'python'.
+# Locate Python: 1) bundled embeddable runtime  2) 'py' launcher  3) 'python'.
 $py = $null
-if (Get-Command py -ErrorAction SilentlyContinue) { $py = @("py", "-3") }
+$bundled = Join-Path $PSScriptRoot "python\python.exe"
+if (Test-Path $bundled) {
+  $py = @($bundled)
+  Write-Host "[AIO] Using the bundled Python in python\ (no system install needed)." -ForegroundColor Cyan
+}
+elseif (Get-Command py -ErrorAction SilentlyContinue) { $py = @("py", "-3") }
 elseif (Get-Command python -ErrorAction SilentlyContinue) { $py = @("python") }
 
 if (-not $py) {
-  Write-Host "[AIO] Python 3.11+ was not found on PATH." -ForegroundColor Yellow
-  Write-Host "      Get it from https://www.python.org/downloads/windows/ (tick 'Add to PATH')."
+  Write-Host "[AIO] No Python found." -ForegroundColor Yellow
+  Write-Host "      Option A: run setup-embedded.ps1 once to download a self-contained Python."
+  Write-Host "      Option B: install Python 3.11+ from https://www.python.org/downloads/windows/."
   Read-Host "Press Enter to exit"
   exit 1
 }

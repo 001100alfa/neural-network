@@ -62,10 +62,27 @@ It launches the local web dashboard and opens your browser at
 Under the hood the launcher just sets `PYTHONPATH=src` and runs
 `python -m aio --web --open`, so nothing is written outside the folder.
 
-> No Python yet? Install it from <https://www.python.org/downloads/windows/>
-> and tick **“Add python.exe to PATH”**. For a fully self-contained drop
-> (Python included), unzip the official *Windows embeddable package* into a
-> `python\` subfolder and point the launcher at it.
+### Fully self-contained (no system Python at all)
+
+To ship a bundle that includes its own Python (so it runs on a clean
+Windows 11 machine with nothing installed):
+
+1. Double-click **`setup-embedded.bat`** once (needs internet). It downloads the
+   official Windows *embeddable* Python into a local **`python\`** folder and
+   wires it to the project's `src\`.
+2. From then on, **`run.bat`** automatically uses `python\` — no system Python
+   required. Copy the whole folder anywhere (USB, another PC) and it just runs,
+   even offline.
+
+```bat
+setup-embedded.bat                 :: one-time, downloads python\
+setup-embedded.bat 3.12.7 amd64    :: pin a specific version / arch
+run.bat                            :: uses the bundled python\
+```
+
+`run.bat` resolves Python in this order: bundled **`python\`** → the `py`
+launcher → `python` on `PATH`. The `python\` folder is git-ignored (it's a
+generated runtime, not source).
 
 ## Quick start
 
