@@ -33,6 +33,9 @@ $zipName = "python-$Version-embed-$Arch.zip"
 $url = "https://www.python.org/ftp/python/$Version/$zipName"
 $tmp = Join-Path $env:TEMP $zipName
 
+# Windows PowerShell 5.1 may default to TLS 1.0; force 1.2 for python.org.
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+
 Write-Host "[setup] Downloading $url" -ForegroundColor Cyan
 Invoke-WebRequest -Uri $url -OutFile $tmp
 

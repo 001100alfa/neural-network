@@ -16,16 +16,15 @@ REM PYEXE = program, PYARGS = extra args (kept separate so paths with spaces
 REM can be quoted while the 'py -3' launcher keeps its argument).
 set "PYEXE="
 set "PYARGS="
-if exist "%~dp0python\python.exe" (
-  set "PYEXE=%~dp0python\python.exe"
-  echo [AIO] Using the bundled Python in python\ ^(no system install needed^).
-)
-if not defined PYEXE (
-  where py >nul 2>&1 && ( set "PYEXE=py" & set "PYARGS=-3" )
-)
-if not defined PYEXE (
-  where python >nul 2>&1 && set "PYEXE=python"
-)
+
+if exist "%~dp0python\python.exe" set "PYEXE=%~dp0python\python.exe"
+if defined PYEXE echo [AIO] Using the bundled Python in python\ ^(no system install needed^).
+
+if not defined PYEXE where py >nul 2>&1 && set "PYEXE=py"
+if "%PYEXE%"=="py" set "PYARGS=-3"
+
+if not defined PYEXE where python >nul 2>&1 && set "PYEXE=python"
+
 if not defined PYEXE (
   echo [AIO] No Python found.
   echo       Option A: double-click setup-embedded.bat once to download a
