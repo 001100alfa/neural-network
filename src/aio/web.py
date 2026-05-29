@@ -9,9 +9,16 @@ no interactive terminal), so it is intended for local/trusted use.
 from __future__ import annotations
 
 import difflib
+import functools
 import json
+import shutil
+import subprocess
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import (
+    BaseHTTPRequestHandler,
+    SimpleHTTPRequestHandler,
+    ThreadingHTTPServer,
+)
 from typing import Any
 
 from .agent import Agent
@@ -84,6 +91,11 @@ class AgentService:
         self.config = config
         self.ui = EventUI()
         self._lock = threading.Lock()
+        # state for the embedded static "web server" panel
+        self._static_host = "127.0.0.1"
+        self._static_httpd: ThreadingHTTPServer | None = None
+        self._static_thread: threading.Thread | None = None
+        self._static_port: int | None = None
         self._build_agent()
 
     def _build_agent(self) -> None:
@@ -142,6 +154,90 @@ class AgentService:
             self._build_agent()
             return self.info()
 
+    # -- Terminal (cmd / bash) -------------------------------------------
+    def exec_command(self, command: str, shell: str = "bash", timeout: int = 120) -> dict[str, Any]:
+        """Run a command directly in the working directory (not via the model)."""
+
+        command = (command or "").strip()
+        if not command:
+            return {"output": "", "exit_code": 0}
+        exe = shutil.which(shell)
+        try:
+            if exe:
+                proc = subprocess.run(
+                    [exe, "-c", command], cwd=str(self.config.workdir),
+                    capture_output=True, text=True, timeout=timeout,
+                )
+            else:
+                proc = subprocess.run(
+                    command, shell=True, cwd=str(self.config.workdir),
+                    capture_output=True, text=True, timeout=timeout,
+                )
+        except subprocess.TimeoutExpired:
+            return {"output": f"command timed out after {timeout}s", "exit_code": 124}
+        out = (proc.stdout or "") + (proc.stderr or "")
+        return {"output": out, "exit_code": proc.returncode}
+
+    # -- Git --------------------------------------------------------------
+    def _run_git(self, args: list[str]) -> str:
+        try:
+            proc = subprocess.run(
+                ["git", *args], cwd=str(self.config.workdir),
+                capture_output=True, text=True, timeout=60,
+            )
+        except FileNotFoundError:
+            return "git is not installed or not on PATH."
+        return ((proc.stdout or "") + (proc.stderr or "")).strip() or "(no output)"
+
+    def git_action(self, action: str, message: str = "", pathspec: str = "-A") -> dict[str, Any]:
+        presets = {
+            "status": ["status", "--short", "--branch"],
+            "diff": ["diff"],
+            "diff_staged": ["diff", "--staged"],
+            "log": ["log", "--oneline", "-15"],
+            "add": ["add", pathspec or "-A"],
+        }
+        if action == "commit":
+            self._run_git(["add", pathspec or "-A"])
+            return {"output": self._run_git(["commit", "-m", message or "update"])}
+        if action not in presets:
+            return {"output": f"unknown git action: {action}"}
+        return {"output": self._run_git(presets[action])}
+
+    # -- Static preview web server ---------------------------------------
+    def server_status(self) -> dict[str, Any]:
+        running = self._static_httpd is not None
+        return {
+            "running": running,
+            "port": self._static_port if running else None,
+            "url": f"http://{self._static_host}:{self._static_port}" if running else None,
+        }
+
+    def server_start(self, port: int = 8080) -> dict[str, Any]:
+        with self._lock:
+            if self._static_httpd is not None:
+                return self.server_status()
+            handler = functools.partial(
+                SimpleHTTPRequestHandler, directory=str(self.config.workdir)
+            )
+            httpd = ThreadingHTTPServer((self._static_host, int(port)), handler)
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            self._static_httpd = httpd
+            self._static_thread = thread
+            self._static_port = int(port)
+            return self.server_status()
+
+    def server_stop(self) -> dict[str, Any]:
+        with self._lock:
+            if self._static_httpd is not None:
+                self._static_httpd.shutdown()
+                self._static_httpd.server_close()
+                self._static_httpd = None
+                self._static_thread = None
+                self._static_port = None
+            return self.server_status()
+
 
 def _make_handler(service: AgentService):
     class Handler(BaseHTTPRequestHandler):
@@ -181,6 +277,22 @@ def _make_handler(service: AgentService):
                     self._json(200, service.reset())
                 elif self.path == "/api/config":
                     self._json(200, service.configure(payload.get("provider"), payload.get("model")))
+                elif self.path == "/api/exec":
+                    self._json(200, service.exec_command(
+                        payload.get("command", ""), payload.get("shell", "bash")))
+                elif self.path == "/api/git":
+                    self._json(200, service.git_action(
+                        payload.get("action", "status"),
+                        payload.get("message", ""),
+                        payload.get("pathspec", "-A")))
+                elif self.path == "/api/server":
+                    action = payload.get("action", "status")
+                    if action == "start":
+                        self._json(200, service.server_start(payload.get("port", 8080)))
+                    elif action == "stop":
+                        self._json(200, service.server_stop())
+                    else:
+                        self._json(200, service.server_status())
                 else:
                     self._json(404, {"error": "not found"})
             except ProviderError as exc:
@@ -203,6 +315,7 @@ def serve(config: Config, host: str = "127.0.0.1", port: int = 8765) -> None:
     except KeyboardInterrupt:
         print("\nshutting down…")
     finally:
+        service.server_stop()
         httpd.server_close()
 
 
@@ -250,6 +363,22 @@ INDEX_HTML = r"""<!DOCTYPE html>
   #send{padding:0 22px;background:#238636;border-color:#2ea043;font-weight:600}
   #send:disabled{opacity:.5;cursor:not-allowed}
   .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-right:6px}
+  /* right-hand tools panel */
+  .panel{width:380px;border-left:1px solid var(--border);background:var(--panel);display:flex;flex-direction:column}
+  .tabs{display:flex;border-bottom:1px solid var(--border)}
+  .tabs button{flex:1;border:0;border-radius:0;background:transparent;color:var(--muted);padding:10px}
+  .tabs button.active{color:var(--text);box-shadow:inset 0 -2px 0 var(--accent)}
+  .tab{display:none;flex:1;flex-direction:column;min-height:0;padding:12px;gap:8px}
+  .tab.active{display:flex}
+  .console{flex:1;overflow:auto;background:#010409;border:1px solid var(--border);border-radius:6px;
+           padding:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;
+           white-space:pre-wrap;color:#c9d1d9;min-height:120px}
+  .row{display:flex;gap:6px}
+  .row input,.row select{flex:1}
+  .gitbtns{display:flex;flex-wrap:wrap;gap:6px}
+  .gitbtns button{flex:1 1 30%}
+  .ec0{color:var(--green)} .ecN{color:var(--red)}
+  a.link{color:var(--accent)}
 </style>
 </head>
 <body>
@@ -280,6 +409,50 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <button id="send">Send</button>
     </footer>
   </main>
+  <div class="panel">
+    <div class="tabs">
+      <button data-tab="terminal" class="active">Terminal</button>
+      <button data-tab="git">Git</button>
+      <button data-tab="server">Web server</button>
+    </div>
+
+    <div class="tab active" id="tab-terminal">
+      <div class="console" id="termOut">$ run shell / bash commands here (executed directly, not via the model)
+</div>
+      <div class="row">
+        <select id="termShell"><option>bash</option><option>sh</option><option>cmd</option></select>
+        <input id="termCmd" placeholder="e.g. ls -la  /  npm test"/>
+        <button id="termRun">Run</button>
+      </div>
+    </div>
+
+    <div class="tab" id="tab-git">
+      <div class="gitbtns">
+        <button data-git="status">status</button>
+        <button data-git="diff">diff</button>
+        <button data-git="diff_staged">staged</button>
+        <button data-git="log">log</button>
+        <button data-git="add">add -A</button>
+      </div>
+      <div class="console diff" id="gitOut">git output…
+</div>
+      <div class="row">
+        <input id="gitMsg" placeholder="commit message"/>
+        <button id="gitCommit">Commit</button>
+      </div>
+    </div>
+
+    <div class="tab" id="tab-server">
+      <div class="console" id="srvOut">Serve the working directory as static files.
+</div>
+      <div class="row">
+        <input id="srvPort" value="8080" style="max-width:90px"/>
+        <button id="srvStart">Start</button>
+        <button id="srvStop">Stop</button>
+        <button id="srvStatus">Status</button>
+      </div>
+    </div>
+  </div>
 </div>
 <script>
 const log = document.getElementById('log');
@@ -356,6 +529,74 @@ document.getElementById('apply').onclick=async()=>{
       model:document.getElementById('modelInput').value})});
   loadInfo();
 };
+
+// ---- tabs ----
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  document.getElementById('tab-'+b.dataset.tab).classList.add('active');
+});
+
+// ---- Terminal (cmd / bash) ----
+const termOut=document.getElementById('termOut'), termCmd=document.getElementById('termCmd');
+async function runTerm(){
+  const command=termCmd.value.trim(); if(!command) return;
+  const shell=document.getElementById('termShell').value;
+  termOut.textContent += '\n$ '+command+'\n'; termCmd.value='';
+  termOut.scrollTop=termOut.scrollHeight;
+  try{
+    const r=await fetch('/api/exec',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({command,shell})});
+    const d=await r.json();
+    termOut.textContent += (d.output||'');
+    const tag=document.createElement('div'); tag.className=d.exit_code===0?'ec0':'ecN';
+    tag.textContent='[exit '+d.exit_code+']'; termOut.appendChild(tag);
+  }catch(e){ termOut.textContent += 'error: '+e+'\n'; }
+  termOut.scrollTop=termOut.scrollHeight;
+}
+document.getElementById('termRun').onclick=runTerm;
+termCmd.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();runTerm();}});
+
+// ---- Git ----
+const gitOut=document.getElementById('gitOut');
+function renderGit(text){
+  gitOut.innerHTML='';
+  (text||'').split('\n').forEach(line=>{
+    let c=''; if(line.startsWith('+')&&!line.startsWith('+++'))c='add';
+    else if(line.startsWith('-')&&!line.startsWith('---'))c='del';
+    else if(line.startsWith('@@'))c='hunk';
+    const ln=document.createElement('div'); ln.className=c; ln.textContent=line; gitOut.appendChild(ln);
+  });
+}
+async function git(action,extra){
+  const r=await fetch('/api/git',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(Object.assign({action},extra||{}))});
+  const d=await r.json(); renderGit(d.output);
+}
+document.querySelectorAll('[data-git]').forEach(b=>b.onclick=()=>git(b.dataset.git));
+document.getElementById('gitCommit').onclick=()=>{
+  const message=document.getElementById('gitMsg').value.trim();
+  if(!message){renderGit('enter a commit message first.');return;}
+  git('commit',{message}).then(()=>{document.getElementById('gitMsg').value='';});
+};
+
+// ---- Web server ----
+const srvOut=document.getElementById('srvOut');
+function renderSrv(d){
+  if(d.running){ srvOut.innerHTML='serving working dir at <a class="link" target="_blank" href="'+d.url+'">'+d.url+'</a>'; }
+  else{ srvOut.textContent='server stopped.'; }
+}
+async function srv(action){
+  const port=document.getElementById('srvPort').value;
+  const r=await fetch('/api/server',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action,port:parseInt(port)||8080})});
+  renderSrv(await r.json());
+}
+document.getElementById('srvStart').onclick=()=>srv('start');
+document.getElementById('srvStop').onclick=()=>srv('stop');
+document.getElementById('srvStatus').onclick=()=>srv('status');
+
 loadInfo();
 </script>
 </body>

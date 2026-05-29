@@ -82,8 +82,15 @@ extra dependencies) that drives the same agent:
   calls, tool results, and **colour-coded diffs** for every file edit
 - sidebar listing the available tools and the working directory
 - switch **provider/model** on the fly and clear the conversation
+- a **tools panel** with three tabs that work independently of the model:
+  - **Terminal** — run `cmd` / `bash` / `sh` commands directly in the working
+    directory and see stdout/stderr + exit code
+  - **Git** — one-click `status` / `diff` / `staged` / `log` / `add`, plus a
+    commit box, with colour-coded diff output
+  - **Web server** — start/stop a static file server that serves the working
+    directory (handy for previewing built sites), with a clickable link
 - small JSON API: `GET /api/info`, `POST /api/chat`, `POST /api/reset`,
-  `POST /api/config`
+  `POST /api/config`, `POST /api/exec`, `POST /api/git`, `POST /api/server`
 
 > In web mode tool calls are **auto-approved** (there is no terminal to prompt),
 > so run it locally against projects you trust. It binds to `127.0.0.1` by default.

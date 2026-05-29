@@ -70,3 +70,44 @@ def test_service_configure_switches_provider(tmp_path, monkeypatch):
     info = svc.configure(provider="ollama", model="qwen2.5-coder")
     assert info["provider"] == "ollama"
     assert info["model"] == "qwen2.5-coder"
+
+
+def test_exec_command(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    res = svc.exec_command("echo hello-from-terminal")
+    assert res["exit_code"] == 0
+    assert "hello-from-terminal" in res["output"]
+    # workdir is respected
+    (tmp_path / "marker.txt").write_text("x")
+    listing = svc.exec_command("ls")
+    assert "marker.txt" in listing["output"]
+
+
+def test_exec_nonzero_exit(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    res = svc.exec_command("exit 3")
+    assert res["exit_code"] == 3
+
+
+def test_git_actions(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    svc.exec_command(
+        "git init -q && git config user.email a@b.c && git config user.name t "
+        "&& git config commit.gpgsign false"
+    )
+    (tmp_path / "x.txt").write_text("content")
+    status = svc.git_action("status")
+    assert "x.txt" in status["output"]
+    commit = svc.git_action("commit", message="add x")
+    assert "add x" in commit["output"] or "master" in commit["output"]
+    log = svc.git_action("log")
+    assert "add x" in log["output"]
+
+
+def test_static_server_lifecycle(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    assert svc.server_status()["running"] is False
+    started = svc.server_start(port=0)  # port 0 -> OS picks a free port
+    assert started["running"] is True
+    stopped = svc.server_stop()
+    assert stopped["running"] is False
