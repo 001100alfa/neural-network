@@ -108,6 +108,52 @@ class OpenAICompatProvider(Provider):
         url, headers = self._models_request()
         return self._parse_models(self._get(url, headers))
 
+    def stream_chat(self, messages, tools=None, system=None, on_delta=None):
+        url, headers, body = self._build_payload(messages, tools or [], system)
+        body["stream"] = True
+        body["stream_options"] = {"include_usage": True}
+        parts: list[str] = []
+        frags: dict[int, dict] = {}
+        usage = None
+        for line in self._stream_lines(url, headers, body):  # pragma: no cover - network
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]" or not data:
+                if data == "[DONE]":
+                    break
+                continue
+            try:
+                chunk = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            if chunk.get("usage"):
+                usage = chunk["usage"]
+            choices = chunk.get("choices") or [{}]
+            delta = choices[0].get("delta", {}) if choices else {}
+            if delta.get("content"):
+                parts.append(delta["content"])
+                if on_delta:
+                    on_delta(delta["content"])
+            for tc in delta.get("tool_calls") or []:
+                slot = frags.setdefault(tc.get("index", 0), {"id": None, "name": "", "args": ""})
+                if tc.get("id"):
+                    slot["id"] = tc["id"]
+                fn = tc.get("function", {})
+                if fn.get("name"):
+                    slot["name"] += fn["name"]
+                if fn.get("arguments"):
+                    slot["args"] += fn["arguments"]
+        tool_calls = []
+        for idx in sorted(frags):
+            s = frags[idx]
+            try:
+                args = json.loads(s["args"]) if s["args"] else {}
+            except json.JSONDecodeError:
+                args = {"_raw": s["args"]}
+            tool_calls.append(ToolCall(id=s["id"] or ToolCall.new_id(), name=s["name"], arguments=args))
+        return AssistantTurn(content="".join(parts).strip(), tool_calls=tool_calls, usage=usage)
+
     def _parse_response(self, data: dict[str, Any]) -> AssistantTurn:
         if "error" in data and "choices" not in data:  # pragma: no cover - network path
             err = data["error"]

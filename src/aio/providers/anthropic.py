@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .base import AssistantTurn, Message, Provider, ProviderError, ToolCall
@@ -112,6 +113,55 @@ class AnthropicProvider(Provider):
     def list_models(self) -> list[str]:
         url, headers = self._models_request()
         return self._parse_models(self._get(url, headers))
+
+    def stream_chat(self, messages, tools=None, system=None, on_delta=None):
+        url, headers, body = self._build_payload(messages, tools or [], system)
+        body["stream"] = True
+        parts: list[str] = []
+        blocks: dict[int, dict] = {}
+        usage: dict[str, Any] = {}
+        for line in self._stream_lines(url, headers, body):  # pragma: no cover - network
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if not data:
+                continue
+            try:
+                ev = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            etype = ev.get("type")
+            if etype == "message_start":
+                u = ev.get("message", {}).get("usage")
+                if u:
+                    usage.update(u)
+            elif etype == "content_block_start":
+                cb = ev.get("content_block", {})
+                if cb.get("type") == "tool_use":
+                    blocks[ev.get("index", 0)] = {"id": cb.get("id"), "name": cb.get("name", ""), "json": ""}
+            elif etype == "content_block_delta":
+                d = ev.get("delta", {})
+                if d.get("type") == "text_delta":
+                    parts.append(d.get("text", ""))
+                    if on_delta:
+                        on_delta(d.get("text", ""))
+                elif d.get("type") == "input_json_delta":
+                    blk = blocks.get(ev.get("index", 0))
+                    if blk is not None:
+                        blk["json"] += d.get("partial_json", "")
+            elif etype == "message_delta":
+                u = ev.get("usage")
+                if u:
+                    usage.update(u)
+        tool_calls = []
+        for idx in sorted(blocks):
+            b = blocks[idx]
+            try:
+                args = json.loads(b["json"]) if b["json"] else {}
+            except json.JSONDecodeError:
+                args = {}
+            tool_calls.append(ToolCall(id=b["id"] or ToolCall.new_id(), name=b["name"], arguments=args))
+        return AssistantTurn(content="".join(parts).strip(), tool_calls=tool_calls, usage=usage or None)
 
     def _parse_response(self, data: dict[str, Any]) -> AssistantTurn:
         if data.get("type") == "error":  # pragma: no cover - network path

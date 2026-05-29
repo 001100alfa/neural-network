@@ -138,3 +138,37 @@ class Provider(ABC):
         the endpoint is reachable and the key is accepted. Subclasses override.
         """
         raise NotImplementedError(f"{self.name} does not support model listing")
+
+    # -- token streaming ---------------------------------------------------
+
+    def stream_chat(
+        self,
+        messages: list[Message],
+        tools: list[dict] | None = None,
+        system: str | None = None,
+        on_delta=None,
+    ) -> AssistantTurn:
+        """Like :meth:`chat`, but invoke ``on_delta(text)`` for each text chunk.
+
+        The base implementation is non-streaming: it makes one request and emits
+        the whole reply as a single delta. Providers that support server-sent
+        streaming override this to deliver tokens as they arrive.
+        """
+        turn = self.chat(messages, tools, system)
+        if on_delta and turn.content:
+            on_delta(turn.content)
+        return turn
+
+    def _stream_lines(self, url: str, headers: dict[str, str], body: dict[str, Any]):
+        """Yield raw SSE lines from a streaming POST (best-effort)."""
+        raw = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(url, data=raw, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                for line in resp:
+                    yield line.decode("utf-8", "replace").rstrip("\r\n")
+        except urllib.error.HTTPError as exc:  # pragma: no cover - network path
+            detail = exc.read().decode("utf-8", "replace")
+            raise ProviderError(f"{self.name} stream failed: HTTP {exc.code}\n{detail}") from exc
+        except urllib.error.URLError as exc:  # pragma: no cover - network path
+            raise ProviderError(f"{self.name} stream failed: {exc.reason} ({url})") from exc

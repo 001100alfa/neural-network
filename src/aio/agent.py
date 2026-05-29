@@ -18,6 +18,7 @@ class Agent:
         ui: UI,
         system_prompt: str,
         max_steps: int = 50,
+        stream: bool = False,
     ) -> None:
         self.provider = provider
         self.tools = tools
@@ -25,6 +26,8 @@ class Agent:
         self.ui = ui
         self.system_prompt = system_prompt
         self.max_steps = max_steps
+        #: when True and the UI supports token(), stream the reply token-by-token
+        self.stream = stream
         self.messages: list[Message] = []
         #: token usage accumulated during the most recent run()
         self.run_usage: dict[str, int] = {"requests": 0, "input_tokens": 0, "output_tokens": 0}
@@ -48,11 +51,21 @@ class Agent:
         self.run_usage = {"requests": 0, "input_tokens": 0, "output_tokens": 0}
         final_text = ""
 
+        use_stream = (
+            self.stream and hasattr(self.ui, "token") and hasattr(self.provider, "stream_chat")
+        )
+
         for _ in range(self.max_steps):
             self.ui.thinking()
-            turn = self.provider.chat(
-                self.messages, tools=self.tools.specs(), system=self.system_prompt
-            )
+            if use_stream:
+                turn = self.provider.stream_chat(
+                    self.messages, tools=self.tools.specs(),
+                    system=self.system_prompt, on_delta=self.ui.token,
+                )
+            else:
+                turn = self.provider.chat(
+                    self.messages, tools=self.tools.specs(), system=self.system_prompt
+                )
             inp, out = self._normalise_usage(turn.usage)
             self.run_usage["requests"] += 1
             self.run_usage["input_tokens"] += inp
@@ -61,7 +74,9 @@ class Agent:
                 Message(role="assistant", content=turn.content, tool_calls=turn.tool_calls)
             )
             if turn.content:
-                self.ui.assistant(turn.content)
+                # In streaming mode the text was already delivered via token().
+                if not use_stream:
+                    self.ui.assistant(turn.content)
                 final_text = turn.content
 
             if not turn.tool_calls:

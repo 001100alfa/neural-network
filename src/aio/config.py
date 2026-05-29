@@ -283,6 +283,38 @@ class KeyStore:
         self.data["active"] = name
         self.save()
 
+    # -- per-provider monthly budget + spend ------------------------------
+    def set_budget(self, name: str, budget_usd: float) -> None:
+        entry = self.data["providers"].setdefault(name, {})
+        entry["budget_usd"] = round(float(budget_usd or 0.0), 4)
+        self.save()
+
+    def get_budget(self, name: str) -> float:
+        try:
+            return float(self.data["providers"].get(name, {}).get("budget_usd", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def monthly(self, name: str, month: str) -> dict[str, Any]:
+        m = self.data.get("usage", {}).get(name)
+        if not m or m.get("month") != month:
+            return {"month": month, "spent_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "requests": 0}
+        return m
+
+    def record_spend(
+        self, name: str, month: str, cost: float, input_tokens: int, output_tokens: int, requests: int
+    ) -> None:
+        usage = self.data.setdefault("usage", {})
+        m = usage.get(name)
+        if not m or m.get("month") != month:  # new month -> reset the counter
+            m = {"month": month, "spent_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "requests": 0}
+        m["spent_usd"] = round(m["spent_usd"] + cost, 6)
+        m["input_tokens"] += input_tokens
+        m["output_tokens"] += output_tokens
+        m["requests"] += requests
+        usage[name] = m
+        self.save()
+
     def apply_to(self, config: "Config") -> None:
         """Overlay stored keys/models/base_urls (and active provider) onto config."""
         for name, pc in config.providers.items():
