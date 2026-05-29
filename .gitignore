@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Local config / secrets
+.aio.toml
+*.local.toml
+.env
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
