@@ -408,6 +408,34 @@ class AgentService:
         out.sort(key=lambda s: s["updated"], reverse=True)
         return {"sessions": out}
 
+    def search_sessions(self, query: str) -> dict[str, Any]:
+        """Full-text search across saved sessions (title + message content)."""
+        q = (query or "").lower().strip()
+        if not q:
+            return {"results": []}
+        results = []
+        for f in self._sessions_dir().glob("*.json"):
+            try:
+                d = json.loads(f.read_text("utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            hits = [m.get("content") or "" for m in d.get("messages", [])
+                    if q in (m.get("content") or "").lower()]
+            title_hit = q in (d.get("title", "") or "").lower()
+            if not hits and not title_hit:
+                continue
+            snippet = ""
+            if hits:
+                c = hits[0]
+                i = c.lower().find(q)
+                snippet = ("…" if i > 30 else "") + c[max(0, i - 30):i + 60]
+            results.append({
+                "id": d.get("id", f.stem), "title": d.get("title", f.stem),
+                "count": len(d.get("messages", [])), "matches": len(hits), "snippet": snippet,
+            })
+        results.sort(key=lambda r: r["matches"], reverse=True)
+        return {"results": results}
+
     def load_session(self, session_id: str, conv_id: str = "default") -> dict[str, Any]:
         with self._lock:
             f = self._sessions_dir() / f"{session_id}.json"
@@ -819,6 +847,8 @@ def _make_handler(service: AgentService):
                 elif self.path == "/api/sessions/import":
                     self._json(200, service.import_session(
                         payload.get("data"), conv_id=payload.get("conv")))
+                elif self.path == "/api/sessions/search":
+                    self._json(200, service.search_sessions(payload.get("query", "")))
                 elif self.path == "/api/exec":
                     self._json(200, service.exec_command(
                         payload.get("command", ""), payload.get("shell", "bash")))
@@ -897,6 +927,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
         box-shadow:0 6px 24px rgba(0,0,0,.4)}
   .settings.on{display:flex}
   .settings .srow{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:13px}
+  .searchres{position:absolute;top:52px;z-index:20;display:none;flex-direction:column;max-width:420px;max-height:50vh;
+        overflow:auto;background:var(--panel);border:1px solid var(--border);border-radius:8px;
+        box-shadow:0 6px 24px rgba(0,0,0,.4)}
+  .searchres.on{display:flex}
+  .searchres .sr{padding:8px 10px;border-bottom:1px solid var(--border);cursor:pointer;font-size:12px}
+  .searchres .sr:hover{background:#0d1117}
+  .searchres .sr b{color:var(--text)} .searchres .sr small{color:var(--muted)}
+  main.dragging{outline:2px dashed var(--accent);outline-offset:-6px}
   header{display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid var(--border);
          background:var(--panel)}
   header h1{font-size:16px;margin:0;letter-spacing:.5px}
@@ -1040,6 +1078,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <input id="modelInput" placeholder="model name" size="16"/>
     <button id="apply">Apply</button>
     <span class="sep">·</span>
+    <input id="searchInput" placeholder="🔎 search chats" size="13" autocomplete="off"/>
+    <div id="searchResults" class="searchres"></div>
     <button id="saveSession" title="save this conversation">Save chat</button>
     <select id="sessionSel" title="saved sessions"><option value="">sessions…</option></select>
     <button id="loadSession">Load</button>
@@ -1285,14 +1325,26 @@ function renderAttachments(){
     const x=document.createElement('span'); x.className='x'; x.textContent='×';
     x.onclick=()=>{pending.splice(i,1);renderAttachments();}; th.appendChild(x); bar.appendChild(th); });
 }
-document.getElementById('attachBtn').onclick=()=>document.getElementById('fileInput').click();
-document.getElementById('fileInput').addEventListener('change',(e)=>{
-  [...e.target.files].forEach(f=>{ const r=new FileReader();
+function addFiles(files){
+  [...files].forEach(f=>{ if(f.type && f.type.indexOf('image/')!==0) return;
+    const r=new FileReader();
     r.onload=()=>{ const b64=String(r.result).split(',')[1]||'';
-      pending.push({media_type:f.type||'image/png',data:b64,name:f.name}); renderAttachments(); };
+      pending.push({media_type:f.type||'image/png',data:b64,name:f.name||'pasted'}); renderAttachments(); };
     r.readAsDataURL(f); });
-  e.target.value='';
-});
+}
+document.getElementById('attachBtn').onclick=()=>document.getElementById('fileInput').click();
+document.getElementById('fileInput').addEventListener('change',(e)=>{ addFiles(e.target.files); e.target.value=''; });
+// drag & drop onto the chat area
+['dragover','drop'].forEach(ev=>document.getElementById('log').addEventListener(ev,e=>{e.preventDefault();}));
+document.getElementById('log').addEventListener('drop',e=>{ if(e.dataTransfer&&e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
+const mainEl=document.querySelector('main');
+['dragover','drop'].forEach(ev=>mainEl.addEventListener(ev,e=>{e.preventDefault(); mainEl.classList.toggle('dragging', ev==='dragover');}));
+mainEl.addEventListener('drop',e=>{ mainEl.classList.remove('dragging'); if(e.dataTransfer&&e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
+mainEl.addEventListener('dragleave',()=>mainEl.classList.remove('dragging'));
+// paste images from the clipboard
+document.addEventListener('paste',e=>{ const items=(e.clipboardData||{}).items||[];
+  const imgs=[...items].filter(it=>it.type&&it.type.indexOf('image/')===0).map(it=>it.getAsFile()).filter(Boolean);
+  if(imgs.length){ addFiles(imgs); } });
 function addUserMsg(text, imgs){
   const d=el('msg user'); if(text) d.textContent=text;
   if(imgs && imgs.length){ const box=el('imgs'); imgs.forEach(p=>{const im=document.createElement('img');
@@ -1300,8 +1352,31 @@ function addUserMsg(text, imgs){
   log.appendChild(d); scroll();
 }
 
+function sysMsg(text){ const d=el('event'); d.appendChild(Object.assign(el('head'),{textContent:text})); log.appendChild(d); scroll(); }
+async function runSlash(text){
+  const [cmd, ...rest]=text.slice(1).split(/\s+/); const arg=rest.join(' ').trim();
+  switch((cmd||'').toLowerCase()){
+    case 'help': sysMsg('commands: /new /clear /save /export [md|json] /provider <name> /model <name> /theme [light|dark] /help'); break;
+    case 'new': switchConv(newConv()); break;
+    case 'clear': document.getElementById('reset').click(); break;
+    case 'save': document.getElementById('saveSession').click(); break;
+    case 'export': exportConv((arg||'md').toLowerCase()==='json'?'json':'md'); break;
+    case 'provider':
+      if(arg){ document.getElementById('providerSel').value=arg; await fetch('/api/config',{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:arg})}); loadInfo(); sysMsg('provider → '+arg); }
+      break;
+    case 'model':
+      if(arg){ await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({model:arg})}); loadInfo(); sysMsg('model → '+arg); }
+      break;
+    case 'theme':{ const s=getSettings(); s.theme=(arg==='light'?'light':'dark'); saveSettings(s); sysMsg('theme → '+s.theme); break; }
+    default: sysMsg('unknown command: /'+cmd+' (try /help)');
+  }
+}
+
 async function sendMsg(){
   const text=input.value.trim(); if(!text && pending.length===0) return;
+  if(text.startsWith('/') && pending.length===0){ input.value=''; await runSlash(text); input.focus(); return; }
   const imgs=pending.map(p=>({media_type:p.media_type,data:p.data}));
   addUserMsg(text, pending); input.value=''; pending=[]; renderAttachments();
   send.disabled=true; const think=addThinking();
@@ -1330,7 +1405,18 @@ async function sendMsg(){
 }
 
 send.onclick=sendMsg;
-input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();}});
+input.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();}                 // Enter / Ctrl+Enter: send
+  if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();sendMsg();}
+});
+// global keyboard shortcuts (chosen to avoid clobbering browser defaults)
+document.addEventListener('keydown',e=>{
+  if(e.altKey && (e.key==='n'||e.key==='N')){ e.preventDefault(); switchConv(newConv()); input.focus(); }
+  else if(e.altKey && (e.key==='w'||e.key==='W')){ e.preventDefault(); if(activeConv) closeConv(activeConv); }
+  else if((e.ctrlKey||e.metaKey) && e.key===','){ e.preventDefault(); document.getElementById('settingsPanel').classList.toggle('on'); }
+  else if(e.key==='Escape'){ document.getElementById('settingsPanel').classList.remove('on');
+    const sr=document.getElementById('searchResults'); if(sr) sr.classList.remove('on'); }
+});
 document.getElementById('reset').onclick=async()=>{
   await fetch('/api/reset',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({conv:activeConv})});
@@ -1418,6 +1504,36 @@ document.getElementById('themeSel').onchange=(e)=>{ const s=getSettings(); s.the
 document.getElementById('fzMinus').onclick=()=>{ const s=getSettings(); s.font=Math.max(11,(s.font||14)-1); saveSettings(s); };
 document.getElementById('fzPlus').onclick=()=>{ const s=getSettings(); s.font=Math.min(22,(s.font||14)+1); saveSettings(s); };
 applySettings();
+
+// ---- search across saved conversations ----
+const searchInput=document.getElementById('searchInput');
+const searchResults=document.getElementById('searchResults');
+async function loadSessionById(id, title){
+  const r=await fetch('/api/sessions/load',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id, conv:activeConv})});
+  const d=await r.json();
+  if(d.ok){ renderHistory(d.messages);
+    if((title||d.title)&&convs[activeConv]){convs[activeConv].title=(title||d.title); renderConvTabs();} }
+}
+let searchTimer=null;
+function placeSearch(){ const r=searchInput.getBoundingClientRect(); searchResults.style.left=r.left+'px'; }
+searchInput.addEventListener('input',()=>{ clearTimeout(searchTimer); searchTimer=setTimeout(doSearch,250); });
+async function doSearch(){
+  const q=searchInput.value.trim();
+  if(!q){ searchResults.classList.remove('on'); return; }
+  const r=await fetch('/api/sessions/search',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({query:q})});
+  const d=await r.json(); searchResults.innerHTML=''; placeSearch();
+  if(!(d.results||[]).length){ searchResults.innerHTML='<div class="sr"><small>no matches</small></div>'; }
+  (d.results||[]).forEach(s=>{ const it=el('sr');
+    it.innerHTML='<b>'+esc(s.title)+'</b> <small>· '+s.matches+' match(es) · '+s.count+' msg</small>'
+      +'<br><small>'+esc(s.snippet||'')+'</small>';
+    it.onclick=()=>{ searchResults.classList.remove('on'); searchInput.value=''; loadSessionById(s.id, s.title); };
+    searchResults.appendChild(it); });
+  searchResults.classList.add('on');
+}
+document.addEventListener('click',(e)=>{ if(!searchResults.contains(e.target) && e.target!==searchInput)
+  searchResults.classList.remove('on'); });
 
 
 // ---- MCP panel ----
