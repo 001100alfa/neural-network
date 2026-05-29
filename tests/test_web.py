@@ -129,6 +129,24 @@ def test_export_markdown_and_json(tmp_path, monkeypatch):
     assert len(data["messages"]) == 3 and data["messages"][0]["content"] == "hi there"
 
 
+def test_search_sessions(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    svc.conversations["default"] = [
+        Message(role="user", content="the quick brown fox"),
+        Message(role="assistant", content="jumps over the lazy dog"),
+    ]
+    svc.save_session(title="Animals chat", session_id="s1")
+    svc.conversations["default"] = [Message(role="user", content="hello world")]
+    svc.save_session(title="Greeting", session_id="s2")
+
+    res = svc.search_sessions("brown")["results"]
+    assert len(res) == 1 and res[0]["id"] == "s1" and "brown" in res[0]["snippet"]
+    # title match counts too
+    assert any(r["title"] == "Greeting" for r in svc.search_sessions("greeting")["results"])
+    # blank query -> nothing
+    assert svc.search_sessions("")["results"] == []
+
+
 def test_import_roundtrip(tmp_path, monkeypatch):
     svc = _service(tmp_path, monkeypatch)
     svc.conversations["default"] = [Message(role="user", content="remember me")]

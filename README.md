@@ -154,6 +154,12 @@ extra dependencies) that drives the same agent:
   keeps its own history (switch / new / close)
 - **export / import** a conversation as **Markdown** or **JSON** (import opens
   it in a new tab)
+- **search** across saved conversations (title + message text) with snippets
+- **drag-and-drop** images onto the chat or **paste** them from the clipboard
+- **keyboard shortcuts** — Enter / `Ctrl+Enter` send, `Alt+N` new chat,
+  `Alt+W` close chat, `Ctrl/Cmd+,` settings, `Esc` close popovers
+- **slash commands** in the input — `/help`, `/new`, `/clear`, `/save`,
+  `/export [md|json]`, `/provider <name>`, `/model <name>`, `/theme [light|dark]`
 - a **settings** popover (⚙): **light / dark** theme and adjustable **font
   size**, persisted in your browser
 - **save / load conversations** — "Save chat" stores the session to disk
@@ -191,7 +197,7 @@ extra dependencies) that drives the same agent:
 - small JSON API: `GET /api/info`, `GET|POST /api/providers`,
   `POST /api/providers/test`, `GET /api/usage`, `POST /api/chat`,
   `GET|POST /api/chat/stream` (SSE; POST carries images + conversation id),
-  `GET /api/sessions`, `POST /api/sessions/{save,load,delete,export,import}`,
+  `GET /api/sessions`, `POST /api/sessions/{save,load,delete,export,import,search}`,
   `GET /api/mcp`, `POST /api/mcp/{add,remove,restart}`,
   `POST /api/conversation/close`, `POST /api/reset`, `POST /api/config`,
   `POST /api/exec`, `POST /api/git`, `POST /api/server`,
