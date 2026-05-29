@@ -101,6 +101,38 @@ class EventUI:
         return "yes"
 
 
+MCP_CATALOG: list[dict[str, Any]] = [
+    {"name": "filesystem", "desc": "Read/write files within a directory",
+     "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]},
+    {"name": "git", "desc": "Inspect & operate on a local git repository",
+     "command": "uvx", "args": ["mcp-server-git", "--repository", "."]},
+    {"name": "github", "desc": "GitHub repos, issues, PRs, code search",
+     "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"],
+     "env_hint": "GITHUB_PERSONAL_ACCESS_TOKEN"},
+    {"name": "fetch", "desc": "Fetch a URL and convert it to Markdown",
+     "command": "uvx", "args": ["mcp-server-fetch"]},
+    {"name": "memory", "desc": "Persistent knowledge-graph memory across sessions",
+     "command": "npx", "args": ["-y", "@modelcontextprotocol/server-memory"]},
+    {"name": "sequential-thinking", "desc": "Structured step-by-step reasoning scratchpad",
+     "command": "npx", "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]},
+    {"name": "everything", "desc": "Reference server exercising all MCP features (testing)",
+     "command": "npx", "args": ["-y", "@modelcontextprotocol/server-everything"]},
+    {"name": "sqlite", "desc": "Query/inspect a SQLite database",
+     "command": "uvx", "args": ["mcp-server-sqlite", "--db-path", "./app.db"]},
+    {"name": "postgres", "desc": "Read-only access to a PostgreSQL database",
+     "command": "npx", "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"]},
+    {"name": "playwright", "desc": "Drive a real browser (Microsoft Playwright MCP)",
+     "command": "npx", "args": ["-y", "@playwright/mcp@latest"]},
+    {"name": "context7", "desc": "Up-to-date library/API documentation (Upstash Context7)",
+     "command": "npx", "args": ["-y", "@upstash/context7-mcp"]},
+    {"name": "time", "desc": "Current time & timezone conversion",
+     "command": "uvx", "args": ["mcp-server-time"]},
+    {"name": "brave-search", "desc": "Web search via the Brave Search API",
+     "command": "npx", "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+     "env_hint": "BRAVE_API_KEY"},
+]
+
+
 def _msg_to_dict(m: Message) -> dict[str, Any]:
     return {
         "role": m.role,
@@ -328,7 +360,9 @@ class AgentService:
                 "name": nm, "command": c.get("command", ""), "args": c.get("args", []),
                 "running": nm in running, "tools": counts.get(nm, 0),
             })
-        return {"servers": servers, "tool_total": len(self._mcp_tools)}
+        configured_names = {s["name"] for s in servers}
+        catalog = [dict(c, installed=(c["name"] in configured_names)) for c in MCP_CATALOG]
+        return {"servers": servers, "tool_total": len(self._mcp_tools), "catalog": catalog}
 
     def mcp_add(self, name, command, args=None, env=None) -> dict[str, Any]:
         if not name or not command:
@@ -1027,6 +1061,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
   /* mcp panel */
   .mcpadd{display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--border);padding-top:10px;margin-top:8px}
   .mcpadd input{padding:5px 8px;font-size:12px}
+  .mcpcathdr{font-size:12px;color:var(--text);font-weight:600;border-top:1px solid var(--border);
+        padding-top:10px;margin-top:10px}
+  .mcat{display:flex;align-items:flex-start;gap:8px;padding:6px 8px;border:1px solid var(--border);
+        border-radius:6px;margin-bottom:6px}
+  .mcat .info{flex:1;min-width:0}
+  .mcat .info b{font-size:12.5px} .mcat .info .d{color:var(--muted);font-size:11px}
+  .mcat .info .cmd{color:var(--muted);font-size:11px;font-family:ui-monospace,Menlo,monospace;
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .mcat .key{font-size:10px;color:var(--yellow);border:1px solid var(--yellow);border-radius:8px;padding:0 5px}
+  .mcat button{padding:3px 8px;font-size:12px;white-space:nowrap}
+  .mcat .ins{font-size:10px;color:var(--green)}
   .ptest{font-size:11px;margin-top:3px;min-height:14px}
   .ptest.ok{color:var(--green)} .ptest.err{color:var(--red)} .ptest.muted{color:var(--muted)}
   .ec0{color:var(--green)} .ecN{color:var(--red)}
@@ -1135,7 +1180,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <b>MCP servers</b>
         <span class="muted">stdio Model Context Protocol servers — their tools are added to the agent</span>
       </div>
-      <div id="mcpList" class="provlist"></div>
+      <div id="mcpList"></div>
       <div class="mcpadd">
         <input id="mcpName" placeholder="name (e.g. filesystem)"/>
         <input id="mcpCmd" placeholder="command (e.g. npx)"/>
@@ -1145,6 +1190,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
           <button id="mcpRestart">Restart all</button>
         </div>
       </div>
+      <div class="mcpcathdr">Open-source servers for coding &amp; project work
+        <span class="muted">— "Use" fills the form (edit path/token, then Add)</span></div>
+      <div id="mcpCatalog" class="provlist"></div>
     </div>
 
     <div class="tab" id="tab-providers">
@@ -1555,6 +1603,28 @@ async function loadMcp(){
     rm.onclick=async()=>{ await fetch('/api/mcp/remove',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({name:s.name})}); loadMcp(); loadInfo(); };
     acts.appendChild(rm); c.appendChild(acts); mcpList.appendChild(c);
+  });
+  renderCatalog(d.catalog||[]);
+}
+function renderCatalog(cat){
+  const box=document.getElementById('mcpCatalog'); box.innerHTML='';
+  cat.forEach(s=>{
+    const row=el('mcat'); const info=el('info');
+    const title=document.createElement('div');
+    title.innerHTML='<b>'+esc(s.name)+'</b>'+(s.installed?' <span class="ins">✓ added</span>':'')
+      +(s.env_hint?' <span class="key" title="needs env var">'+esc(s.env_hint)+'</span>':'');
+    info.appendChild(title);
+    info.appendChild(Object.assign(el('d'),{textContent:s.desc||''}));
+    info.appendChild(Object.assign(el('cmd'),{textContent:s.command+' '+(s.args||[]).join(' ')}));
+    const use=document.createElement('button'); use.textContent='Use →';
+    use.onclick=()=>{
+      document.getElementById('mcpName').value=s.name;
+      document.getElementById('mcpCmd').value=s.command;
+      document.getElementById('mcpArgs').value=(s.args||[]).join(' ');
+      document.getElementById('mcpName').scrollIntoView({block:'nearest'});
+      document.getElementById('mcpArgs').focus();
+    };
+    row.appendChild(info); row.appendChild(use); box.appendChild(row);
   });
 }
 document.getElementById('mcpAdd').onclick=async()=>{
