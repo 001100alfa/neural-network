@@ -94,9 +94,11 @@ extra dependencies) that drives the same agent:
 - sidebar listing the available tools and the working directory
 - switch **provider/model** on the fly and clear the conversation
 - a **tools panel** with four tabs that work independently of the model:
-  - **Editor** — an in-browser IDE: file tree, a code editor with
-    Save / Revert / `Ctrl+S` / `Tab`-indent, sandboxed to the working directory.
-    It auto-refreshes when the agent edits files.
+  - **Editor** — an in-browser IDE: file tree, **multi-file tabs** (with
+    unsaved-change indicators), and a code editor with **syntax highlighting**
+    (Python, JS/TS, JSON, HTML, CSS, shell, Markdown — all zero-dependency),
+    plus Save / Revert / `Ctrl+S` / `Tab`-indent, sandboxed to the working
+    directory. It auto-refreshes open files when the agent edits them.
   - **Terminal** — run `cmd` / `bash` / `sh` commands directly in the working
     directory and see stdout/stderr + exit code
   - **Git** — one-click `status` / `diff` / `staged` / `log` / `add`, plus a

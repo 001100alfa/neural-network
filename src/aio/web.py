@@ -425,12 +425,27 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .ec0{color:var(--green)} .ecN{color:var(--red)}
   a.link{color:var(--accent)}
   /* editor / IDE tab */
-  #edText{flex:1;min-height:300px;resize:none;background:#010409;border:1px solid var(--border);
-          border-radius:6px;padding:10px;color:#c9d1d9;
-          font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.5;
-          tab-size:4;white-space:pre;overflow:auto}
   #edFile{flex:1}
   .ok{color:var(--green)} .muted{color:var(--muted)}
+  .edtabs{display:flex;gap:4px;overflow-x:auto;min-height:30px}
+  .edtabs .etab{display:flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid var(--border);
+        border-bottom:0;border-radius:6px 6px 0 0;background:#0d1117;color:var(--muted);cursor:pointer;
+        white-space:nowrap;font-size:12px}
+  .edtabs .etab.active{color:var(--text);background:#010409;box-shadow:inset 0 2px 0 var(--accent)}
+  .edtabs .etab .x{color:var(--muted);padding:0 2px} .edtabs .etab .x:hover{color:var(--red)}
+  .edtabs .etab.dirty .name::after{content:" •";color:var(--yellow)}
+  .editor-wrap{position:relative;flex:1;min-height:280px;border:1px solid var(--border);
+        border-radius:0 6px 6px 6px;overflow:hidden;background:#010409}
+  .editor-wrap pre.hl,.editor-wrap textarea{margin:0;padding:10px;border:0;box-sizing:border-box;
+        font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.5;tab-size:4;
+        white-space:pre;word-wrap:normal;position:absolute;inset:0;width:100%;height:100%;overflow:auto}
+  .editor-wrap pre.hl{pointer-events:none;color:#c9d1d9;z-index:0}
+  .editor-wrap pre.hl code{font:inherit;white-space:pre}
+  .editor-wrap textarea{background:transparent;color:transparent;caret-color:#e6edf3;resize:none;z-index:1;outline:none}
+  /* syntax tokens */
+  .t-comment{color:#8b949e;font-style:italic} .t-string{color:#a5d6ff} .t-keyword{color:#ff7b72}
+  .t-number{color:#79c0ff} .t-tag{color:#7ee787} .t-atrule{color:#d2a8ff}
+  .t-heading{color:#ff7b72;font-weight:bold} .t-code{color:#a5d6ff} .t-prop{color:#79c0ff}
 </style>
 </head>
 <body>
@@ -474,7 +489,11 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <select id="edFile"><option value="">— open a file —</option></select>
         <button id="edReload" title="reload file tree">⟳</button>
       </div>
-      <textarea id="edText" spellcheck="false" placeholder="select a file to edit…"></textarea>
+      <div id="edTabs" class="edtabs"></div>
+      <div class="editor-wrap">
+        <pre class="hl" id="edHLpre"><code id="edHL"></code></pre>
+        <textarea id="edText" spellcheck="false" wrap="off" placeholder="select a file to edit…"></textarea>
+      </div>
       <div class="row">
         <span id="edStatus" class="muted" style="flex:1;align-self:center"></span>
         <button id="edRevert">Revert</button>
@@ -582,7 +601,7 @@ async function sendMsg(){
     const d=await r.json(); think.remove();
     (d.events||[]).forEach(addEvent);
     if(d.error){ addEvent({type:'error',text:d.error}); }
-    if((d.events||[]).some(e=>e.type==='diff')){ loadTree(); if(edFile.value) openFile(edFile.value); }
+    if((d.events||[]).some(e=>e.type==='diff')){ loadTree(); if(window.__edRefresh) window.__edRefresh(); }
   }catch(e){ think.remove(); addEvent({type:'error',text:String(e)}); }
   send.disabled=false; input.focus();
 }
@@ -664,43 +683,128 @@ document.getElementById('srvStart').onclick=()=>srv('start');
 document.getElementById('srvStop').onclick=()=>srv('stop');
 document.getElementById('srvStatus').onclick=()=>srv('status');
 
-// ---- Editor (in-browser IDE) ----
+// ---- Editor (in-browser IDE) : syntax highlighting + multi-file tabs ----
 const edFile=document.getElementById('edFile'), edText=document.getElementById('edText'),
-      edStatus=document.getElementById('edStatus');
-let edClean='';
-async function loadTree(){
-  const r=await fetch('/api/fs/tree',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
-  const d=await r.json(); const cur=edFile.value;
-  edFile.innerHTML='<option value="">— open a file —</option>';
-  (d.files||[]).forEach(f=>{const o=document.createElement('option');o.value=f;o.textContent=f;edFile.appendChild(o);});
-  if(cur) edFile.value=cur;
+      edStatus=document.getElementById('edStatus'), edHL=document.getElementById('edHL'),
+      edHLpre=document.getElementById('edHLpre'), edTabs=document.getElementById('edTabs');
+
+// --- tiny zero-dependency syntax highlighter ---
+function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+const KW={
+  python:'def class return if elif else for while import from as with try except finally raise in not and or is None True False lambda yield global nonlocal pass break continue assert del async await self print',
+  js:'function return if else for while var let const new class extends import export default from typeof instanceof in of await async yield try catch finally throw switch case break continue this null true false undefined delete void do',
+  shell:'if then fi else elif for do done case esac in function while until select export local return'};
+function kw(l){return '\\b(?:'+KW[l].trim().split(/\s+/).join('|')+')\\b';}
+const STR="'(?:\\\\.|[^'\\\\])*'|\"(?:\\\\.|[^\"\\\\])*\"";
+const LANGS={
+  python:{comment:'#.*',string:"'''[\\s\\S]*?'''|\"\"\"[\\s\\S]*?\"\"\"|"+STR,keyword:kw('python'),number:'\\b\\d[\\d_]*\\.?\\d*\\b'},
+  js:{comment:'//.*|/\\*[\\s\\S]*?\\*/',string:STR+"|`(?:\\\\.|[^`\\\\])*`",keyword:kw('js'),number:'\\b\\d[\\d_]*\\.?\\d*\\b'},
+  json:{string:'"(?:\\\\.|[^"\\\\])*"',keyword:'\\b(?:true|false|null)\\b',number:'-?\\b\\d[\\d_]*\\.?\\d*(?:[eE][+-]?\\d+)?\\b'},
+  css:{comment:'/\\*[\\s\\S]*?\\*/',atrule:'@[\\w-]+',string:STR,number:'-?\\b\\d*\\.?\\d+(?:px|em|rem|%|vh|vw|s|ms|fr|deg)?\\b'},
+  html:{comment:'<!--[\\s\\S]*?-->',tag:'</?[a-zA-Z][\\w:-]*|/?>',string:STR},
+  shell:{comment:'#.*',string:STR,keyword:kw('shell'),number:'\\b\\d+\\b'},
+  md:{heading:'^#{1,6}.*',code:'```[\\s\\S]*?```|`[^`]*`'}};
+const EXT={py:'python',pyw:'python',js:'js',jsx:'js',ts:'js',tsx:'js',mjs:'js',json:'json',
+  css:'css',scss:'css',html:'html',htm:'html',xml:'html',sh:'shell',bash:'shell',md:'md',markdown:'md'};
+function langFor(path){const m=(path||'').match(/\.([A-Za-z0-9]+)$/);return m?EXT[m[1].toLowerCase()]:null;}
+const RX={};
+function compile(lang){if(RX[lang])return RX[lang];const spec=LANGS[lang];const keys=Object.keys(spec);
+  RX[lang]={keys,re:new RegExp(keys.map(k=>'(?<'+k+'>'+spec[k]+')').join('|'),'gms')};return RX[lang];}
+function highlight(code,lang){
+  if(!lang||!LANGS[lang])return esc(code);
+  const {re}=compile(lang); re.lastIndex=0; let out='',last=0,m;
+  while((m=re.exec(code))){
+    out+=esc(code.slice(last,m.index));
+    const g=Object.keys(m.groups).find(k=>m.groups[k]!==undefined);
+    out+='<span class="t-'+g+'">'+esc(m[0])+'</span>';
+    last=m.index+m[0].length;
+    if(m[0].length===0)re.lastIndex++;
+  }
+  out+=esc(code.slice(last)); return out;
 }
-async function openFile(path){
-  if(!path){edText.value='';edStatus.textContent='';return;}
+
+// --- multi-file tab state ---
+let tabs=[], active=-1;
+function activeTab(){return active>=0?tabs[active]:null;}
+function render(){
+  edHL.innerHTML=highlight(edText.value, active>=0?langFor(tabs[active].path):null);
+  edHLpre.scrollTop=edText.scrollTop; edHLpre.scrollLeft=edText.scrollLeft;
+}
+function renderTabs(){
+  edTabs.innerHTML='';
+  tabs.forEach((t,i)=>{
+    const el=document.createElement('div'); el.className='etab'+(i===active?' active':'')+(t.dirty?' dirty':'');
+    const name=document.createElement('span'); name.className='name'; name.textContent=t.path.split('/').pop();
+    name.title=t.path; name.onclick=()=>activate(i);
+    const x=document.createElement('span'); x.className='x'; x.textContent='×';
+    x.onclick=(e)=>{e.stopPropagation();closeTab(i);};
+    el.appendChild(name); el.appendChild(x); edTabs.appendChild(el);
+  });
+}
+function activate(i){
+  active=i; const t=tabs[i];
+  edText.value=t.content; edFile.value=t.path;
+  edStatus.innerHTML='<span class="muted">'+t.path+'</span>';
+  renderTabs(); render(); edText.focus();
+}
+async function openPath(path){
+  if(!path)return;
+  const existing=tabs.findIndex(t=>t.path===path);
+  if(existing>=0){activate(existing);return;}
   const r=await fetch('/api/fs/read',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({path})});
   const d=await r.json();
-  if(d.error){edStatus.innerHTML='<span class="ecN">'+d.error+'</span>';edText.value='';return;}
-  edText.value=d.content; edClean=d.content; edStatus.innerHTML='<span class="muted">'+path+'</span>';
+  if(d.error){edStatus.innerHTML='<span class="ecN">'+d.error+'</span>';return;}
+  tabs.push({path,content:d.content,clean:d.content,dirty:false}); activate(tabs.length-1);
 }
-async function saveFile(){
-  const path=edFile.value; if(!path){edStatus.textContent='no file selected';return;}
+function closeTab(i){
+  if(tabs[i].dirty && !confirm('Discard unsaved changes in '+tabs[i].path+'?'))return;
+  tabs.splice(i,1);
+  if(tabs.length===0){active=-1;edText.value='';edFile.value='';edStatus.textContent='';renderTabs();render();return;}
+  activate(Math.min(i,tabs.length-1));
+}
+async function saveActive(){
+  const t=activeTab(); if(!t){edStatus.textContent='no file open';return;}
+  t.content=edText.value;
   const r=await fetch('/api/fs/write',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({path,content:edText.value})});
+    body:JSON.stringify({path:t.path,content:t.content})});
   const d=await r.json();
   if(d.error){edStatus.innerHTML='<span class="ecN">'+d.error+'</span>';return;}
-  edClean=edText.value; edStatus.innerHTML='<span class="ok">saved '+path+' ('+d.bytes+' bytes)</span>';
+  t.clean=t.content; t.dirty=false; renderTabs();
+  edStatus.innerHTML='<span class="ok">saved '+t.path+' ('+d.bytes+' bytes)</span>';
 }
-edFile.onchange=()=>openFile(edFile.value);
+async function loadTree(){
+  const r=await fetch('/api/fs/tree',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  const d=await r.json();
+  edFile.innerHTML='<option value="">— open a file —</option>';
+  (d.files||[]).forEach(f=>{const o=document.createElement('option');o.value=f;o.textContent=f;edFile.appendChild(o);});
+  if(active>=0)edFile.value=tabs[active].path;
+}
+edFile.onchange=()=>openPath(edFile.value);
 document.getElementById('edReload').onclick=loadTree;
-document.getElementById('edSave').onclick=saveFile;
-document.getElementById('edRevert').onclick=()=>{edText.value=edClean;edStatus.innerHTML='<span class="muted">reverted</span>';};
-edText.addEventListener('input',()=>{ if(edFile.value) edStatus.innerHTML='<span class="muted">'+edFile.value+' • unsaved</span>'; });
-edText.addEventListener('keydown',e=>{ // Ctrl/Cmd+S to save, Tab inserts spaces
-  if((e.ctrlKey||e.metaKey)&&e.key==='s'){e.preventDefault();saveFile();}
+document.getElementById('edSave').onclick=saveActive;
+document.getElementById('edRevert').onclick=()=>{const t=activeTab();if(!t)return;
+  t.content=t.clean;t.dirty=false;edText.value=t.clean;renderTabs();render();
+  edStatus.innerHTML='<span class="muted">reverted '+t.path+'</span>';};
+edText.addEventListener('input',()=>{const t=activeTab();if(t){t.content=edText.value;
+  const d=t.content!==t.clean; if(d!==t.dirty){t.dirty=d;renderTabs();}} render();});
+edText.addEventListener('scroll',()=>{edHLpre.scrollTop=edText.scrollTop;edHLpre.scrollLeft=edText.scrollLeft;});
+edText.addEventListener('keydown',e=>{
+  if((e.ctrlKey||e.metaKey)&&e.key==='s'){e.preventDefault();saveActive();}
   if(e.key==='Tab'){e.preventDefault();const s=edText.selectionStart,en=edText.selectionEnd;
-    edText.value=edText.value.slice(0,s)+'    '+edText.value.slice(en);edText.selectionStart=edText.selectionEnd=s+4;}
+    edText.value=edText.value.slice(0,s)+'    '+edText.value.slice(en);
+    edText.selectionStart=edText.selectionEnd=s+4;edText.dispatchEvent(new Event('input'));}
 });
+// re-read open, unmodified files after the agent edits them on disk
+async function refreshOpen(){
+  for(const t of tabs){ if(t.dirty)continue;
+    const r=await fetch('/api/fs/read',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({path:t.path})});
+    const d=await r.json(); if(!d.error){t.content=d.content;t.clean=d.content;}
+  }
+  if(active>=0){edText.value=tabs[active].content;render();}
+}
+window.__edRefresh=refreshOpen;
 loadTree();
 
 loadInfo();
