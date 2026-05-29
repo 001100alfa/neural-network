@@ -18,6 +18,13 @@ if TYPE_CHECKING:
 PROVIDERS: dict[str, type[Provider]] = {
     "anthropic": AnthropicProvider,
     "openai": OpenAICompatProvider,
+    # OpenAI-compatible providers — the endpoint comes from each one's base_url.
+    "google": OpenAICompatProvider,
+    "groq": OpenAICompatProvider,
+    "mistral": OpenAICompatProvider,
+    "deepseek": OpenAICompatProvider,
+    "xai": OpenAICompatProvider,
+    "together": OpenAICompatProvider,
     "openrouter": OpenRouterProvider,
     "ollama": OllamaProvider,
 }

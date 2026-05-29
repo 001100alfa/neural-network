@@ -124,6 +124,28 @@ def test_openai_parse():
     assert turn.tool_calls[0].arguments == {"path": "y"}
 
 
+def test_new_providers_use_openai_compatible_endpoints():
+    """The 6 added global providers build as OpenAI-compatible with their URL."""
+    from aio.config import load_config
+    from aio.providers import build_provider
+    from aio.providers.openai_compat import OpenAICompatProvider
+
+    cfg = load_config()
+    for name, host in [
+        ("google", "generativelanguage.googleapis.com"),
+        ("groq", "api.groq.com"),
+        ("mistral", "api.mistral.ai"),
+        ("deepseek", "api.deepseek.com"),
+        ("xai", "api.x.ai"),
+        ("together", "api.together.xyz"),
+    ]:
+        cfg.provider = name
+        p = build_provider(cfg)
+        assert isinstance(p, OpenAICompatProvider)
+        url, _, _ = p._build_payload([Message(role="user", content="hi")], [], None)
+        assert host in url and url.endswith("/chat/completions")
+
+
 def test_ollama_default_base_url():
     p = OllamaProvider(model="qwen")
     url, headers, _ = p._build_payload([Message(role="user", content="hi")], [], None)

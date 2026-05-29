@@ -63,3 +63,41 @@ def test_mcp_servers_parsed(tmp_path: Path):
 def test_unknown_provider_raises(tmp_path: Path):
     with pytest.raises(ValueError):
         load_config(workdir=tmp_path, overrides={"provider": "nope"})
+
+
+def test_ten_global_providers(tmp_path: Path, monkeypatch):
+    for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    cfg = load_config(workdir=tmp_path)
+    from aio.config import PROVIDER_DEFAULTS
+
+    assert len(PROVIDER_DEFAULTS) == 10
+    assert len(cfg.providers) == 10
+    # a few of the newer providers have sane endpoints
+    assert "groq.com" in cfg.providers["groq"].base_url
+    assert "deepseek.com" in cfg.providers["deepseek"].base_url
+    assert "x.ai" in cfg.providers["xai"].base_url
+
+
+def test_keystore_roundtrip_and_apply(tmp_path: Path):
+    from aio.config import KeyStore
+
+    path = tmp_path / "keys.json"
+    ks = KeyStore.load(path)
+    ks.set("groq", api_key="k123456", model="m1")
+    ks.set_active("groq")
+
+    # reloads from disk
+    ks2 = KeyStore.load(path)
+    assert ks2.get("groq")["api_key"] == "k123456"
+    assert ks2.data["active"] == "groq"
+
+    cfg = load_config(workdir=tmp_path)
+    ks2.apply_to(cfg)
+    assert cfg.provider == "groq"
+    assert cfg.providers["groq"].api_key == "k123456"
+    assert cfg.providers["groq"].model == "m1"
+
+    # clearing a key removes it
+    ks2.set("groq", api_key="")
+    assert "api_key" not in KeyStore.load(path).get("groq")

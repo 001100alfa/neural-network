@@ -10,10 +10,55 @@ from aio.web import AgentService, EventUI
 
 def _service(tmp_path: Path, monkeypatch) -> AgentService:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    # Isolate the API-key store so tests never touch the real ~/.config file.
+    monkeypatch.setenv("AIO_KEYS_FILE", str(tmp_path / "keys.json"))
     from aio.config import load_config
 
     cfg = load_config(workdir=tmp_path, overrides={"provider": "anthropic"})
     return AgentService(cfg)
+
+
+def test_providers_panel_lists_ten(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    info = svc.providers_info()
+    assert len(info["providers"]) == 10
+    names = {p["name"] for p in info["providers"]}
+    assert {"anthropic", "openai", "google", "groq", "mistral",
+            "deepseek", "xai", "together", "openrouter", "ollama"} == names
+    # ollama needs no key and is always "configured"
+    ollama = next(p for p in info["providers"] if p["name"] == "ollama")
+    assert ollama["needs_key"] is False and ollama["configured"] is True
+
+
+def test_set_provider_key_persists_masks_and_activates(tmp_path, monkeypatch):
+    import json
+
+    svc = _service(tmp_path, monkeypatch)
+    info = svc.set_provider_key("groq", api_key="gsk_secret_ABCD1234", make_active=True)
+
+    assert info["active"] == "groq"
+    groq = next(p for p in info["providers"] if p["name"] == "groq")
+    assert groq["active"] is True and groq["configured"] is True
+    assert groq["key_masked"].endswith("1234")
+    # the raw key must never appear in the API payload
+    assert "gsk_secret_ABCD1234" not in json.dumps(info)
+    # but it IS persisted to the (isolated) key store on disk
+    saved = json.loads((tmp_path / "keys.json").read_text())
+    assert saved["providers"]["groq"]["api_key"] == "gsk_secret_ABCD1234"
+    assert saved["active"] == "groq"
+
+
+def test_keys_survive_reload(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    svc.set_provider_key("deepseek", api_key="ds_key_9999", model="deepseek-reasoner", make_active=True)
+    # a fresh service (new process simulation) should pick the key + active up
+    from aio.config import load_config
+
+    cfg2 = load_config(workdir=tmp_path)
+    svc2 = AgentService(cfg2)
+    assert svc2.config.provider == "deepseek"
+    assert svc2.config.providers["deepseek"].api_key == "ds_key_9999"
+    assert svc2.config.providers["deepseek"].model == "deepseek-reasoner"
 
 
 class FakeProvider:

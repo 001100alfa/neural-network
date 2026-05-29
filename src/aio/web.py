@@ -11,6 +11,7 @@ from __future__ import annotations
 import difflib
 import functools
 import json
+import os
 import shutil
 import subprocess
 import threading
@@ -22,7 +23,7 @@ from http.server import (
 from typing import Any
 
 from .agent import Agent
-from .config import Config
+from .config import PROVIDER_DEFAULTS, Config, KeyStore
 from .providers import ProviderError, build_provider
 from .tools import ToolContext, ToolError, default_registry
 
@@ -102,6 +103,10 @@ class AgentService:
         self.config = config
         self.ui = EventUI()
         self._lock = threading.Lock()
+        # API keys entered via the dashboard are persisted here and overlaid on
+        # top of env/config so they survive restarts.
+        self.keys = KeyStore.load()
+        self.keys.apply_to(self.config)
         # state for the embedded static "web server" panel
         self._static_host = "127.0.0.1"
         self._static_httpd: ThreadingHTTPServer | None = None
@@ -172,16 +177,75 @@ class AgentService:
 
     def configure(self, provider: str | None, model: str | None) -> dict[str, Any]:
         with self._lock:
-            from .config import PROVIDER_DEFAULTS
-
             if provider:
                 if provider not in PROVIDER_DEFAULTS:
                     raise ProviderError(f"unknown provider '{provider}'")
                 self.config.provider = provider
+                self.keys.set_active(provider)
             if model:
                 self.config.active.model = model
+                self.keys.set(self.config.provider, model=model)
             self._build_agent()
             return self.info()
+
+    # -- AI providers / API keys panel -----------------------------------
+    @staticmethod
+    def _mask(key: str | None) -> str:
+        if not key:
+            return ""
+        return ("•" * max(0, len(key) - 4)) + key[-4:] if len(key) > 4 else "••••"
+
+    def providers_info(self) -> dict[str, Any]:
+        """List every provider with masked key + configuration (never the raw key)."""
+        out = []
+        for name, d in PROVIDER_DEFAULTS.items():
+            pc = self.config.providers[name]
+            env_set = bool(d["env"] and os.environ.get(d["env"]))
+            stored = bool(self.keys.get(name).get("api_key"))
+            needs_key = d["env"] is not None
+            out.append(
+                {
+                    "name": name,
+                    "label": d["label"],
+                    "model": pc.model,
+                    "base_url": pc.base_url,
+                    "env": d["env"],
+                    "needs_key": needs_key,
+                    "key_masked": self._mask(pc.api_key),
+                    "configured": (not needs_key) or bool(pc.api_key),
+                    "source": "stored" if stored else ("env" if env_set else ""),
+                    "active": name == self.config.provider,
+                }
+            )
+        return {"active": self.config.provider, "providers": out}
+
+    def set_provider_key(
+        self,
+        name: str,
+        api_key: str | None = None,
+        model: str | None = None,
+        base_url: str | None = None,
+        make_active: bool = False,
+    ) -> dict[str, Any]:
+        with self._lock:
+            if name not in PROVIDER_DEFAULTS:
+                raise ProviderError(f"unknown provider '{name}'")
+            self.keys.set(name, api_key=api_key, model=model, base_url=base_url)
+            # reflect immediately on the live config
+            pc = self.config.providers[name]
+            if api_key is not None:
+                pc.api_key = api_key or (
+                    os.environ.get(PROVIDER_DEFAULTS[name]["env"] or "") or None
+                )
+            if model:
+                pc.model = model
+            if base_url:
+                pc.base_url = base_url
+            if make_active:
+                self.config.provider = name
+                self.keys.set_active(name)
+            self._build_agent()
+            return self.providers_info()
 
     # -- Terminal (cmd / bash) -------------------------------------------
     def exec_command(self, command: str, shell: str = "bash", timeout: int = 120) -> dict[str, Any]:
@@ -333,6 +397,8 @@ def _make_handler(service: AgentService):
                 self._send(200, INDEX_HTML.encode("utf-8"), "text/html; charset=utf-8")
             elif self.path == "/api/info":
                 self._json(200, service.info())
+            elif self.path == "/api/providers":
+                self._json(200, service.providers_info())
             elif self.path.startswith("/api/chat/stream"):
                 self._chat_stream()
             else:
@@ -367,6 +433,14 @@ def _make_handler(service: AgentService):
                     self._json(200, service.reset())
                 elif self.path == "/api/config":
                     self._json(200, service.configure(payload.get("provider"), payload.get("model")))
+                elif self.path == "/api/providers":
+                    self._json(200, service.set_provider_key(
+                        payload.get("provider", ""),
+                        api_key=payload.get("api_key"),
+                        model=payload.get("model"),
+                        base_url=payload.get("base_url"),
+                        make_active=bool(payload.get("make_active")),
+                    ))
                 elif self.path == "/api/exec":
                     self._json(200, service.exec_command(
                         payload.get("command", ""), payload.get("shell", "bash")))
@@ -483,6 +557,25 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .row input,.row select{flex:1}
   .gitbtns{display:flex;flex-wrap:wrap;gap:6px}
   .gitbtns button{flex:1 1 30%}
+  /* providers / keys panel */
+  .phdr{display:flex;flex-direction:column;gap:2px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+  .phdr .muted{font-size:11px}
+  .provlist{flex:1;overflow:auto;display:flex;flex-direction:column;gap:8px;padding-top:8px}
+  .pcard{border:1px solid var(--border);border-radius:8px;padding:8px 10px;background:#0d1117}
+  .pcard.active{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+  .pcard .ptitle{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+  .pcard .ptitle b{font-size:13px}
+  .pdot{width:8px;height:8px;border-radius:50%;background:#484f58;flex:0 0 auto}
+  .pdot.ok{background:var(--green)} .pdot.on{background:var(--accent)}
+  .pcard .badge{font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:10px;padding:1px 6px}
+  .pcard .badge.act{color:var(--accent);border-color:var(--accent)}
+  .pcard input{width:100%;margin:2px 0;padding:4px 6px;font-size:12px}
+  .pcard .prow{display:flex;gap:6px;align-items:center}
+  .pcard .prow input{flex:1}
+  .pcard .pacts{display:flex;gap:6px;margin-top:4px}
+  .pcard .pacts button{flex:1;padding:4px}
+  .padv{font-size:11px;color:var(--muted);cursor:pointer;user-select:none}
+  .padv-body{display:none} .padv-body.on{display:block}
   .ec0{color:var(--green)} .ecN{color:var(--red)}
   a.link{color:var(--accent)}
   /* editor / IDE tab */
@@ -552,9 +645,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
   <div class="panel">
     <div class="tabs">
       <button data-tab="editor" class="active">Editor</button>
+      <button data-tab="providers">Providers</button>
       <button data-tab="terminal">Terminal</button>
       <button data-tab="git">Git</button>
       <button data-tab="server">Web server</button>
+    </div>
+
+    <div class="tab" id="tab-providers">
+      <div class="phdr">
+        <b>AI providers &amp; API keys</b>
+        <span class="muted">keys are stored locally (chmod 600) and never sent anywhere except the provider you pick</span>
+      </div>
+      <div id="provList" class="provlist"></div>
     </div>
 
     <div class="tab active" id="tab-editor">
@@ -975,6 +1077,62 @@ async function refreshOpen(){
 }
 window.__edRefresh=refreshOpen;
 loadTree();
+
+// ---- Providers / API keys panel ----
+const provList=document.getElementById('provList');
+async function loadProviders(){
+  const r=await fetch('/api/providers'); const d=await r.json();
+  provList.innerHTML='';
+  d.providers.forEach(p=>provList.appendChild(provCard(p)));
+}
+function provCard(p){
+  const card=el('pcard'+(p.active?' active':''));
+  const t=el('ptitle');
+  t.appendChild(el('pdot'+(p.active?' on':(p.configured?' ok':''))));
+  const nm=document.createElement('b'); nm.textContent=p.label; t.appendChild(nm);
+  const sp=document.createElement('span'); sp.style.flex='1'; t.appendChild(sp);
+  const badge=el('badge'+(p.active?' act':''));
+  badge.textContent=p.active?'active':(p.configured?(p.source||'set'):(p.needs_key?'no key':'local'));
+  t.appendChild(badge); card.appendChild(t);
+
+  let keyInput=null;
+  if(p.needs_key){
+    keyInput=document.createElement('input'); keyInput.type='password'; keyInput.autocomplete='off';
+    keyInput.placeholder = p.configured ? ('saved '+p.key_masked+' — type new to replace') : ('API key  ('+(p.env||'')+')');
+    card.appendChild(keyInput);
+  } else {
+    const note=el('muted','local runtime — no API key required'); note.style.fontSize='11px'; card.appendChild(note);
+  }
+  const modelInput=document.createElement('input'); modelInput.value=p.model||''; modelInput.placeholder='model';
+  card.appendChild(modelInput);
+
+  const adv=el('padv','▸ advanced (base URL)');
+  const advBody=el('padv-body');
+  const baseInput=document.createElement('input'); baseInput.value=p.base_url||''; baseInput.placeholder='base URL';
+  advBody.appendChild(baseInput);
+  adv.onclick=()=>{const on=advBody.classList.toggle('on'); adv.textContent=(on?'▾':'▸')+' advanced (base URL)';};
+  card.appendChild(adv); card.appendChild(advBody);
+
+  const acts=el('pacts');
+  const saveBtn=document.createElement('button'); saveBtn.textContent='Save';
+  saveBtn.onclick=()=>saveProvider(p.name, keyInput, modelInput, baseInput, false);
+  const useBtn=document.createElement('button'); useBtn.textContent=p.active?'In use':'Use';
+  useBtn.disabled=!!p.active;
+  useBtn.onclick=()=>saveProvider(p.name, keyInput, modelInput, baseInput, true);
+  acts.appendChild(saveBtn); acts.appendChild(useBtn); card.appendChild(acts);
+  return card;
+}
+async function saveProvider(name, keyInput, modelInput, baseInput, makeActive){
+  const body={provider:name, model:modelInput.value, base_url:baseInput.value, make_active:makeActive};
+  if(keyInput && keyInput.value) body.api_key=keyInput.value;
+  await fetch('/api/providers',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)});
+  await loadProviders();
+  loadInfo();
+}
+const provTabBtn=document.querySelector('.tabs button[data-tab="providers"]');
+if(provTabBtn) provTabBtn.addEventListener('click', loadProviders);
+loadProviders();
 
 loadInfo();
 </script>

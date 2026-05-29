@@ -21,6 +21,8 @@ python-*-embed-*.zip
 .aio.toml
 *.local.toml
 .env
+keys.json
+.aio.keys.json
 
 # OS / editor
 .DS_Store

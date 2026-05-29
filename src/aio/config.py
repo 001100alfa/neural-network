@@ -10,6 +10,7 @@ Precedence (highest wins):
 
 from __future__ import annotations
 
+import json
 import os
 import tomllib
 from dataclasses import dataclass, field
@@ -17,29 +18,76 @@ from pathlib import Path
 from typing import Any
 
 # Built-in per-provider defaults. ``env`` is the environment variable that
-# supplies the API key when one is not given in a config file.
+# supplies the API key when one is not given in a config file or the key store.
+# All providers except "anthropic" speak the OpenAI-compatible chat API.
 PROVIDER_DEFAULTS: dict[str, dict[str, Any]] = {
     "anthropic": {
+        "label": "Anthropic (Claude)",
         "model": "claude-sonnet-4-6",
         "base_url": "https://api.anthropic.com",
         "env": "ANTHROPIC_API_KEY",
     },
     "openai": {
+        "label": "OpenAI (GPT)",
         "model": "gpt-4o",
         "base_url": "https://api.openai.com/v1",
         "env": "OPENAI_API_KEY",
     },
+    "google": {
+        "label": "Google Gemini",
+        "model": "gemini-2.0-flash",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "env": "GEMINI_API_KEY",
+    },
+    "groq": {
+        "label": "Groq",
+        "model": "llama-3.3-70b-versatile",
+        "base_url": "https://api.groq.com/openai/v1",
+        "env": "GROQ_API_KEY",
+    },
+    "mistral": {
+        "label": "Mistral AI",
+        "model": "mistral-large-latest",
+        "base_url": "https://api.mistral.ai/v1",
+        "env": "MISTRAL_API_KEY",
+    },
+    "deepseek": {
+        "label": "DeepSeek",
+        "model": "deepseek-chat",
+        "base_url": "https://api.deepseek.com/v1",
+        "env": "DEEPSEEK_API_KEY",
+    },
+    "xai": {
+        "label": "xAI (Grok)",
+        "model": "grok-2-latest",
+        "base_url": "https://api.x.ai/v1",
+        "env": "XAI_API_KEY",
+    },
+    "together": {
+        "label": "Together AI",
+        "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        "base_url": "https://api.together.xyz/v1",
+        "env": "TOGETHER_API_KEY",
+    },
     "openrouter": {
+        "label": "OpenRouter",
         "model": "anthropic/claude-sonnet-4-6",
         "base_url": "https://openrouter.ai/api/v1",
         "env": "OPENROUTER_API_KEY",
     },
     "ollama": {
+        "label": "Ollama (local)",
         "model": "qwen2.5-coder",
         "base_url": "http://localhost:11434/v1",
         "env": None,  # local, no key required
     },
 }
+
+# Order used when auto-detecting which provider to use from available API keys.
+AUTODETECT_ORDER = (
+    "anthropic", "openai", "google", "groq", "mistral",
+    "deepseek", "xai", "together", "openrouter",
+)
 
 DEFAULT_SYSTEM_PROMPT = """\
 You are AIO, an all-in-one open-source terminal coding agent operating inside a \
@@ -104,7 +152,7 @@ def _auto_detect_provider(file_cfg: dict[str, Any]) -> str:
 
     if file_cfg.get("provider"):
         return str(file_cfg["provider"])
-    for name in ("anthropic", "openai", "openrouter"):
+    for name in AUTODETECT_ORDER:
         env = PROVIDER_DEFAULTS[name]["env"]
         if env and os.environ.get(env):
             return name
@@ -164,3 +212,87 @@ def load_config(
         system_prompt=file_cfg.get("system_prompt", DEFAULT_SYSTEM_PROMPT),
         mcp_servers=mcp_servers,
     )
+
+
+def keys_file_path() -> Path:
+    """Where API keys entered via the dashboard are persisted (JSON)."""
+    env = os.environ.get("AIO_KEYS_FILE")
+    if env:
+        return Path(env)
+    return Path.home() / ".config" / "aio" / "keys.json"
+
+
+@dataclass
+class KeyStore:
+    """Local, persistent store of provider API keys / model / base_url.
+
+    Stored as plain JSON (chmod 600) — comparable to other CLI tools. Intended
+    for local/trusted use; the file is git-ignored.
+    """
+
+    path: Path
+    data: dict[str, Any] = field(default_factory=lambda: {"providers": {}, "active": None})
+
+    @classmethod
+    def load(cls, path: Path | str | None = None) -> "KeyStore":
+        p = Path(path) if path else keys_file_path()
+        data: dict[str, Any] = {"providers": {}, "active": None}
+        if p.is_file():
+            try:
+                loaded = json.loads(p.read_text("utf-8"))
+                if isinstance(loaded, dict):
+                    data.update(loaded)
+            except (json.JSONDecodeError, OSError):
+                pass
+        data.setdefault("providers", {})
+        data.setdefault("active", None)
+        return cls(path=p, data=data)
+
+    def save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
+        try:
+            os.chmod(self.path, 0o600)
+        except OSError:  # pragma: no cover - e.g. some Windows setups
+            pass
+
+    def get(self, name: str) -> dict[str, Any]:
+        return self.data["providers"].get(name, {})
+
+    def set(
+        self,
+        name: str,
+        *,
+        api_key: str | None = None,
+        model: str | None = None,
+        base_url: str | None = None,
+    ) -> None:
+        entry = self.data["providers"].setdefault(name, {})
+        if api_key is not None:
+            if api_key == "":
+                entry.pop("api_key", None)
+            else:
+                entry["api_key"] = api_key
+        if model:
+            entry["model"] = model
+        if base_url:
+            entry["base_url"] = base_url
+        self.save()
+
+    def set_active(self, name: str) -> None:
+        self.data["active"] = name
+        self.save()
+
+    def apply_to(self, config: "Config") -> None:
+        """Overlay stored keys/models/base_urls (and active provider) onto config."""
+        for name, pc in config.providers.items():
+            stored = self.data["providers"].get(name, {})
+            if stored.get("api_key"):
+                pc.api_key = stored["api_key"]
+            if stored.get("model"):
+                pc.model = stored["model"]
+            if stored.get("base_url"):
+                pc.base_url = stored["base_url"]
+        active = self.data.get("active")
+        if active in config.providers:
+            config.provider = active
