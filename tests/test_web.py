@@ -174,6 +174,29 @@ def test_mcp_catalog(tmp_path, monkeypatch):
     assert gh.get("env_hint") == "GITHUB_PERSONAL_ACCESS_TOKEN"
 
 
+def test_mcp_catalog_extra_servers(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    cat = {c["name"]: c for c in svc.mcp_info()["catalog"]}
+    for n in ("slack", "sentry", "notion", "docker", "gitlab"):
+        assert n in cat, f"{n} missing from catalog"
+    assert cat["gitlab"]["env_hint"] == "GITLAB_PERSONAL_ACCESS_TOKEN"
+    assert cat["slack"]["env_hint"] == "SLACK_BOT_TOKEN"
+    assert cat["sentry"]["env_hint"] == "SENTRY_AUTH_TOKEN"
+    assert "env_hint" not in cat["docker"]  # docker needs no token
+
+
+def test_mcp_add_with_env_persists(tmp_path, monkeypatch):
+    import json
+
+    svc = _service(tmp_path, monkeypatch)
+    svc.mcp_add("gitlab", "npx", args=["-y", "@modelcontextprotocol/server-gitlab"],
+                env={"GITLAB_PERSONAL_ACCESS_TOKEN": "glpat-xxx"})
+    saved = json.loads((tmp_path / "keys.json").read_text())
+    entry = next(c for c in saved["mcp_servers"] if c["name"] == "gitlab")
+    assert entry["env"]["GITLAB_PERSONAL_ACCESS_TOKEN"] == "glpat-xxx"
+    assert entry["autostart"] is True
+
+
 def test_default_mcp_servers_configured_not_autostarted(tmp_path, monkeypatch):
     svc = _service(tmp_path, monkeypatch)  # fresh key store -> built-in defaults
     info = svc.mcp_info()

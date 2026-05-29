@@ -130,6 +130,20 @@ MCP_CATALOG: list[dict[str, Any]] = [
     {"name": "brave-search", "desc": "Web search via the Brave Search API",
      "command": "npx", "args": ["-y", "@modelcontextprotocol/server-brave-search"],
      "env_hint": "BRAVE_API_KEY"},
+    {"name": "gitlab", "desc": "GitLab projects, issues, merge requests",
+     "command": "npx", "args": ["-y", "@modelcontextprotocol/server-gitlab"],
+     "env_hint": "GITLAB_PERSONAL_ACCESS_TOKEN"},
+    {"name": "slack", "desc": "Read/post Slack messages & channels",
+     "command": "npx", "args": ["-y", "@modelcontextprotocol/server-slack"],
+     "env_hint": "SLACK_BOT_TOKEN"},
+    {"name": "sentry", "desc": "Inspect Sentry issues & stack traces",
+     "command": "npx", "args": ["-y", "@sentry/mcp-server@latest"],
+     "env_hint": "SENTRY_AUTH_TOKEN"},
+    {"name": "notion", "desc": "Read/write Notion pages & databases",
+     "command": "npx", "args": ["-y", "@notionhq/notion-mcp-server"],
+     "env_hint": "NOTION_TOKEN"},
+    {"name": "docker", "desc": "Manage Docker containers & images",
+     "command": "uvx", "args": ["docker-mcp"]},
 ]
 
 # Servers configured out of the box (when nothing else is set): the coding /
@@ -1217,6 +1231,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <input id="mcpName" placeholder="name (e.g. filesystem)"/>
         <input id="mcpCmd" placeholder="command (e.g. npx)"/>
         <input id="mcpArgs" placeholder="args (e.g. -y @modelcontextprotocol/server-filesystem .)"/>
+        <input id="mcpEnv" placeholder="env (KEY=value, space/newline separated — for tokens)"/>
         <div class="row">
           <button id="mcpAdd">Add &amp; start</button>
           <button id="mcpRestart">Restart all</button>
@@ -1659,21 +1674,33 @@ function renderCatalog(cat){
       document.getElementById('mcpName').value=s.name;
       document.getElementById('mcpCmd').value=s.command;
       document.getElementById('mcpArgs').value=(s.args||[]).join(' ');
+      const envEl=document.getElementById('mcpEnv');
+      envEl.value = s.env_hint ? (s.env_hint+'=') : '';
       document.getElementById('mcpName').scrollIntoView({block:'nearest'});
-      document.getElementById('mcpArgs').focus();
+      (s.env_hint ? envEl : document.getElementById('mcpArgs')).focus();
     };
     row.appendChild(info); row.appendChild(use); box.appendChild(row);
   });
+}
+function parseEnv(s){
+  const env={};
+  (s||'').split(/[\s\n]+/).forEach(tok=>{ const i=tok.indexOf('=');
+    if(i>0){ env[tok.slice(0,i)]=tok.slice(i+1); } });
+  return env;
 }
 document.getElementById('mcpAdd').onclick=async()=>{
   const name=document.getElementById('mcpName').value.trim();
   const command=document.getElementById('mcpCmd').value.trim();
   const args=document.getElementById('mcpArgs').value.trim();
+  const env=parseEnv(document.getElementById('mcpEnv').value);
   if(!name||!command) return;
+  const body={name, command, args};
+  if(Object.keys(env).length) body.env=env;
   await fetch('/api/mcp/add',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({name, command, args})});
+    body:JSON.stringify(body)});
   document.getElementById('mcpName').value=''; document.getElementById('mcpCmd').value='';
-  document.getElementById('mcpArgs').value=''; loadMcp(); loadInfo();
+  document.getElementById('mcpArgs').value=''; document.getElementById('mcpEnv').value='';
+  loadMcp(); loadInfo();
 };
 document.getElementById('mcpRestart').onclick=async()=>{
   await fetch('/api/mcp/restart',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); loadMcp(); loadInfo();

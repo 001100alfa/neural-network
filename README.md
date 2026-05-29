@@ -183,8 +183,9 @@ extra dependencies) that drives the same agent:
   configured out of the box** (filesystem, fetch, memory, sequential-thinking,
   everything, sqlite, postgres, playwright, context7, time, brave-search) —
   listed but **not auto-started** (so launching never spawns 11 processes); hit
-  **Start** on the ones you want. A built-in **catalog** (incl. git, github, …)
-  lets you add more with "Use"
+  **Start** on the ones you want. A built-in **catalog** (git, github, gitlab,
+  slack, sentry, notion, docker, …) lets you add more with "Use", and the add
+  form takes **env vars** (`KEY=value`) for servers that need a token
 - a **tools panel** with these tabs that work independently of the model:
   - **Editor** — an in-browser IDE: file tree, **multi-file tabs** (with
     unsaved-change indicators), **line numbers**, in-editor **find & replace**
