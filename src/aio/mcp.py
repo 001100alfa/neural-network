@@ -150,11 +150,12 @@ def load_mcp_tools(server_configs: list[dict[str, Any]], ui=None) -> tuple[list[
         )
         try:
             server.start()
-            for spec in server.list_tools():
+            specs = server.list_tools()
+            for spec in specs:
                 tools.append(MCPTool(server, spec))
             servers.append(server)
             if ui is not None:
-                ui.info(f"mcp: connected '{name}' ({len(server.list_tools())} tools)")
+                ui.info(f"mcp: connected '{name}' ({len(specs)} tools)")
         except Exception as exc:  # pragma: no cover - depends on external server
             if ui is not None:
                 ui.warn(f"mcp: failed to start '{name}': {exc}")
