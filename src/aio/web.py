@@ -36,36 +36,47 @@ class EventUI:
 
     def __init__(self) -> None:
         self.events: list[dict[str, Any]] = []
+        # Optional live callback: when set, each event is delivered immediately
+        # (used for Server-Sent Events streaming) in addition to being stored.
+        self.sink = None
 
     def drain(self) -> list[dict[str, Any]]:
         out = self.events
         self.events = []
         return out
 
+    def _emit(self, event: dict[str, Any]) -> None:
+        self.events.append(event)
+        if self.sink is not None:
+            try:
+                self.sink(event)
+            except Exception:  # pragma: no cover - client disconnect, etc.
+                pass
+
     # -- methods used by the agent / tools --------------------------------
     def banner(self, *_a, **_k) -> None:  # no-op in web mode
         pass
 
     def info(self, text: str) -> None:
-        self.events.append({"type": "info", "text": text})
+        self._emit({"type": "info", "text": text})
 
     def warn(self, text: str) -> None:
-        self.events.append({"type": "warn", "text": text})
+        self._emit({"type": "warn", "text": text})
 
     def error(self, text: str) -> None:
-        self.events.append({"type": "error", "text": text})
+        self._emit({"type": "error", "text": text})
 
     def thinking(self, text: str = "thinking…") -> None:
-        self.events.append({"type": "thinking", "text": text})
+        self._emit({"type": "thinking", "text": text})
 
     def assistant(self, text: str) -> None:
-        self.events.append({"type": "assistant", "text": text})
+        self._emit({"type": "assistant", "text": text})
 
     def tool_call(self, name: str, args: dict) -> None:
-        self.events.append({"type": "tool_call", "name": name, "args": args})
+        self._emit({"type": "tool_call", "name": name, "args": args})
 
     def tool_result(self, text: str, error: bool = False) -> None:
-        self.events.append({"type": "tool_result", "text": text, "error": error})
+        self._emit({"type": "tool_result", "text": text, "error": error})
 
     def show_diff(self, old: str, new: str, path: str) -> None:
         if old == new:
@@ -76,7 +87,7 @@ class EventUI:
                 fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="",
             )
         )
-        self.events.append({"type": "diff", "path": path, "diff": diff})
+        self._emit({"type": "diff", "path": path, "diff": diff})
 
     def confirm(self, name: str, args: dict) -> str:
         # No interactive prompt available over HTTP; auto-approve.
@@ -135,6 +146,24 @@ class AgentService:
                 self.ui.error(str(exc))
                 final = ""
             return {"events": self.ui.drain(), "final": final}
+
+    def chat_stream(self, message: str, emit) -> None:
+        """Run a turn, delivering each event to ``emit`` as it happens.
+
+        ``emit`` receives every agent/tool event live and a final
+        ``{"type": "done", "final": ...}`` event when the turn completes.
+        """
+        with self._lock:
+            self.ui.drain()
+            self.ui.sink = emit
+            try:
+                final = self.agent.run(message)
+            except ProviderError as exc:
+                emit({"type": "error", "text": str(exc)})
+                final = ""
+            finally:
+                self.ui.sink = None
+            emit({"type": "done", "final": final})
 
     def reset(self) -> dict[str, Any]:
         with self._lock:
@@ -304,8 +333,30 @@ def _make_handler(service: AgentService):
                 self._send(200, INDEX_HTML.encode("utf-8"), "text/html; charset=utf-8")
             elif self.path == "/api/info":
                 self._json(200, service.info())
+            elif self.path.startswith("/api/chat/stream"):
+                self._chat_stream()
             else:
                 self._json(404, {"error": "not found"})
+
+        def _chat_stream(self):
+            from urllib.parse import parse_qs, urlparse
+
+            qs = parse_qs(urlparse(self.path).query)
+            message = (qs.get("message") or [""])[0]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+
+            def emit(event):
+                self.wfile.write(f"data: {json.dumps(event)}\n\n".encode("utf-8"))
+                self.wfile.flush()
+
+            try:
+                service.chat_stream(message, emit)
+            except (BrokenPipeError, ConnectionResetError):  # pragma: no cover
+                pass
 
         def do_POST(self):  # noqa: N802
             try:
@@ -447,9 +498,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .code-area pre.hl{pointer-events:none;color:#c9d1d9;z-index:0}
   .code-area pre.hl code{font:inherit;white-space:pre}
   .code-area textarea{background:transparent;color:transparent;caret-color:#e6edf3;resize:none;z-index:1;outline:none}
-  .findbar{position:absolute;top:6px;right:14px;z-index:5;display:none;gap:4px;align-items:center;
-        background:#161b22;border:1px solid var(--border);border-radius:6px;padding:4px 6px}
+  .findbar{position:absolute;top:6px;right:14px;z-index:5;display:none;flex-direction:column;gap:4px;
+        background:#161b22;border:1px solid var(--border);border-radius:6px;padding:6px}
   .findbar.on{display:flex}
+  .findbar .frow{display:flex;gap:4px;align-items:center}
   .findbar input{padding:3px 6px;font-size:12px;width:130px}
   .findbar .cnt{color:var(--muted);min-width:46px;text-align:center;font-size:12px}
   .findbar button{padding:2px 7px}
@@ -508,11 +560,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
           <textarea id="edText" spellcheck="false" wrap="off" placeholder="select a file to edit…"></textarea>
         </div>
         <div class="findbar" id="edFindBar">
-          <input id="edFindInput" placeholder="find" spellcheck="false"/>
-          <span class="cnt" id="edFindCnt">0/0</span>
-          <button id="edFindPrev" title="previous (Shift+Enter)">↑</button>
-          <button id="edFindNext" title="next (Enter)">↓</button>
-          <button id="edFindClose" title="close (Esc)">×</button>
+          <div class="frow">
+            <input id="edFindInput" placeholder="find" spellcheck="false"/>
+            <span class="cnt" id="edFindCnt">0/0</span>
+            <button id="edFindPrev" title="previous (Shift+Enter)">↑</button>
+            <button id="edFindNext" title="next (Enter)">↓</button>
+            <button id="edFindClose" title="close (Esc)">×</button>
+          </div>
+          <div class="frow">
+            <input id="edReplaceInput" placeholder="replace" spellcheck="false"/>
+            <button id="edReplaceOne" title="replace current match">Replace</button>
+            <button id="edReplaceAll" title="replace all matches">All</button>
+          </div>
         </div>
       </div>
       <div class="row">
@@ -612,19 +671,25 @@ async function loadInfo(){
     document.getElementById('tools').appendChild(x);});
 }
 
-async function sendMsg(){
+function sendMsg(){
   const text=input.value.trim(); if(!text) return;
   addMsg('user', text); input.value=''; send.disabled=true;
   const think=addThinking();
-  try{
-    const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({message:text})});
-    const d=await r.json(); think.remove();
-    (d.events||[]).forEach(addEvent);
-    if(d.error){ addEvent({type:'error',text:d.error}); }
-    if((d.events||[]).some(e=>e.type==='diff')){ loadTree(); if(window.__edRefresh) window.__edRefresh(); }
-  }catch(e){ think.remove(); addEvent({type:'error',text:String(e)}); }
-  send.disabled=false; input.focus();
+  let sawDiff=false, gotFirst=false;
+  // Stream events live via Server-Sent Events.
+  const es=new EventSource('/api/chat/stream?message='+encodeURIComponent(text));
+  const finish=()=>{ es.close(); send.disabled=false; input.focus();
+    if(sawDiff){ loadTree(); if(window.__edRefresh) window.__edRefresh(); } };
+  es.onmessage=(e)=>{
+    if(!gotFirst){ think.remove(); gotFirst=true; }
+    let ev; try{ ev=JSON.parse(e.data); }catch(_){ return; }
+    if(ev.type==='done'){ finish(); return; }
+    if(ev.type==='diff') sawDiff=true;
+    if(ev.type!=='thinking') addEvent(ev);
+  };
+  es.onerror=()=>{ if(!gotFirst) think.remove();
+    if(send.disabled){ addEvent({type:'error',text:'connection lost'}); }
+    finish(); };
 }
 
 send.onclick=sendMsg;
@@ -866,6 +931,29 @@ edFindInput.addEventListener('keydown', e=>{
 document.getElementById('edFindNext').onclick=()=>nextFind(1);
 document.getElementById('edFindPrev').onclick=()=>nextFind(-1);
 document.getElementById('edFindClose').onclick=closeFind;
+
+// ---- replace ----
+const edReplaceInput=document.getElementById('edReplaceInput');
+function replaceOne(){
+  if(findIdx<0||!findMatches.length||!edFindInput.value)return;
+  const start=findMatches[findIdx], end=start+edFindInput.value.length;
+  edText.value=edText.value.slice(0,start)+edReplaceInput.value+edText.value.slice(end);
+  edText.dispatchEvent(new Event('input'));   // updates tab/dirty + re-highlight
+  runFind();                                  // recompute (jumps to first remaining)
+}
+function replaceAll(){
+  if(!edFindInput.value||!findMatches.length)return;
+  let v=edText.value; const flen=edFindInput.value.length, rep=edReplaceInput.value, n=findMatches.length;
+  for(let i=findMatches.length-1;i>=0;i--){const s=findMatches[i]; v=v.slice(0,s)+rep+v.slice(s+flen);}
+  edText.value=v; edText.dispatchEvent(new Event('input'));
+  runFind(); edFindCnt.textContent='replaced '+n;
+}
+document.getElementById('edReplaceOne').onclick=replaceOne;
+document.getElementById('edReplaceAll').onclick=replaceAll;
+edReplaceInput.addEventListener('keydown',e=>{
+  if(e.key==='Enter'){e.preventDefault();replaceOne();}
+  if(e.key==='Escape'){e.preventDefault();closeFind();}
+});
 // re-read open, unmodified files after the agent edits them on disk
 async function refreshOpen(){
   for(const t of tabs){ if(t.dirty)continue;

@@ -65,6 +65,22 @@ def test_service_chat_collects_events(tmp_path, monkeypatch):
     assert "hello world" in tr["text"]
 
 
+def test_service_chat_stream_emits_live(tmp_path, monkeypatch):
+    (tmp_path / "f.txt").write_text("hello world")
+    svc = _service(tmp_path, monkeypatch)
+    svc.agent.provider = FakeProvider()  # read_file then finish
+
+    events = []
+    svc.chat_stream("read f.txt", events.append)
+
+    types = [e["type"] for e in events]
+    assert "tool_call" in types
+    assert "tool_result" in types
+    # the stream is terminated by a single 'done' event carrying the final text
+    assert types[-1] == "done"
+    assert events[-1]["final"] == "all done"
+
+
 def test_service_configure_switches_provider(tmp_path, monkeypatch):
     svc = _service(tmp_path, monkeypatch)
     info = svc.configure(provider="ollama", model="qwen2.5-coder")

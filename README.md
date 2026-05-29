@@ -89,14 +89,16 @@ aio --web --port 8765
 A single-page dashboard (served by the Python stdlib — no JS build step, no
 extra dependencies) that drives the same agent:
 
-- chat with the agent and watch each step stream in: assistant messages, tool
-  calls, tool results, and **colour-coded diffs** for every file edit
+- chat with the agent and watch each step **stream in live (Server-Sent
+  Events)**: assistant messages, tool calls, tool results, and **colour-coded
+  diffs** appear as they happen
 - sidebar listing the available tools and the working directory
 - switch **provider/model** on the fly and clear the conversation
 - a **tools panel** with four tabs that work independently of the model:
   - **Editor** — an in-browser IDE: file tree, **multi-file tabs** (with
-    unsaved-change indicators), **line numbers**, in-editor **find** (`Ctrl+F`
-    with next/prev + match count), and **syntax highlighting**
+    unsaved-change indicators), **line numbers**, in-editor **find & replace**
+    (`Ctrl+F`, next/prev + match count, Replace / Replace-all), and
+    **syntax highlighting**
     (Python, JS/TS, JSON, HTML, CSS, shell, Markdown — all zero-dependency),
     plus Save / Revert / `Ctrl+S` / `Tab`-indent, sandboxed to the working
     directory. It auto-refreshes open files when the agent edits them.
@@ -106,8 +108,9 @@ extra dependencies) that drives the same agent:
     commit box, with colour-coded diff output
   - **Web server** — start/stop a static file server that serves the working
     directory (handy for previewing built sites), with a clickable link
-- small JSON API: `GET /api/info`, `POST /api/chat`, `POST /api/reset`,
-  `POST /api/config`, `POST /api/exec`, `POST /api/git`, `POST /api/server`,
+- small JSON API: `GET /api/info`, `POST /api/chat`,
+  `GET /api/chat/stream` (SSE), `POST /api/reset`, `POST /api/config`,
+  `POST /api/exec`, `POST /api/git`, `POST /api/server`,
   `POST /api/fs/{tree,read,write}`
 
 > In web mode tool calls are **auto-approved** (there is no terminal to prompt),
