@@ -167,12 +167,29 @@ def test_mcp_catalog(tmp_path, monkeypatch):
             "playwright", "context7", "sqlite", "postgres"} <= names
     fs = next(c for c in cat if c["name"] == "filesystem")
     assert fs["command"] == "npx" and "@modelcontextprotocol/server-filesystem" in fs["args"]
-    assert fs["installed"] is False
+    # filesystem ships as a default server -> already installed; git does not
+    assert fs["installed"] is True
+    assert next(c for c in cat if c["name"] == "git")["installed"] is False
     gh = next(c for c in cat if c["name"] == "github")
     assert gh.get("env_hint") == "GITHUB_PERSONAL_ACCESS_TOKEN"
-    # the installed flag flips once a catalog server is configured
-    svc.mcp_add("filesystem", "npx", args=["-y", "@modelcontextprotocol/server-filesystem", "."])
-    assert next(c for c in svc.mcp_info()["catalog"] if c["name"] == "filesystem")["installed"] is True
+
+
+def test_default_mcp_servers_configured_not_autostarted(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)  # fresh key store -> built-in defaults
+    info = svc.mcp_info()
+    names = {s["name"] for s in info["servers"]}
+    assert {"filesystem", "fetch", "context7", "brave-search", "playwright",
+            "sqlite", "postgres", "memory", "sequential-thinking", "time", "everything"} == names
+    assert {"git", "github"}.isdisjoint(names)            # excluded
+    # configured but not auto-started (so launch never spawns npx/uvx)
+    assert all(s["autostart"] is False and s["running"] is False for s in info["servers"])
+    # starting one opts it into autostart and persists to the key store
+    svc.mcp_start("memory")
+    mem = next(s for s in svc.mcp_info()["servers"] if s["name"] == "memory")
+    assert mem["autostart"] is True
+    import json
+    saved = json.loads((tmp_path / "keys.json").read_text())
+    assert any(c["name"] == "memory" and c["autostart"] for c in saved["mcp_servers"])
 
 
 def test_mcp_add_list_remove(tmp_path, monkeypatch):

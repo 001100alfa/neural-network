@@ -132,6 +132,19 @@ MCP_CATALOG: list[dict[str, Any]] = [
      "env_hint": "BRAVE_API_KEY"},
 ]
 
+# Servers configured out of the box (when nothing else is set): the coding /
+# project catalog minus git+github. They are listed as "configured" but NOT
+# auto-started (autostart=False) so launching never spawns 11 npx/uvx processes;
+# each gets a Start button in the panel.
+_DEFAULT_MCP_NAMES = {
+    "filesystem", "fetch", "context7", "brave-search", "playwright",
+    "sqlite", "postgres", "memory", "sequential-thinking", "time", "everything",
+}
+DEFAULT_MCP_SERVERS: list[dict[str, Any]] = [
+    {"name": c["name"], "command": c["command"], "args": list(c["args"]), "autostart": False}
+    for c in MCP_CATALOG if c["name"] in _DEFAULT_MCP_NAMES
+]
+
 
 def _msg_to_dict(m: Message) -> dict[str, Any]:
     return {
@@ -209,11 +222,13 @@ class AgentService:
 
     # -- MCP servers (web mode) ------------------------------------------
     def _mcp_configs(self) -> list[dict]:
-        """Configured MCP servers: from the key store, falling back to config."""
+        """Configured MCP servers: key store -> .aio.toml -> built-in defaults."""
         stored = self.keys.data.get("mcp_servers")
         if stored is not None:
             return stored
-        return list(self.config.mcp_servers or [])
+        if self.config.mcp_servers:
+            return list(self.config.mcp_servers)
+        return [dict(s) for s in DEFAULT_MCP_SERVERS]
 
     def _reload_mcp(self) -> None:
         from .mcp import load_mcp_tools
@@ -223,9 +238,11 @@ class AgentService:
                 s.stop()
             except Exception:  # pragma: no cover
                 pass
-        configs = self._mcp_configs()
-        if configs:
-            self._mcp_tools, self._mcp_servers = load_mcp_tools(configs, ui=self.ui)
+        # only start servers opted into autostart (manual adds default to True;
+        # the built-in defaults are autostart=False until the user clicks Start)
+        to_start = [c for c in self._mcp_configs() if c.get("autostart", True)]
+        if to_start:
+            self._mcp_tools, self._mcp_servers = load_mcp_tools(to_start, ui=self.ui)
         else:
             self._mcp_tools, self._mcp_servers = [], []
         self._build_agent()
@@ -359,6 +376,7 @@ class AgentService:
             servers.append({
                 "name": nm, "command": c.get("command", ""), "args": c.get("args", []),
                 "running": nm in running, "tools": counts.get(nm, 0),
+                "autostart": bool(c.get("autostart", True)),
             })
         configured_names = {s["name"] for s in servers}
         catalog = [dict(c, installed=(c["name"] in configured_names)) for c in MCP_CATALOG]
@@ -369,10 +387,22 @@ class AgentService:
             raise ProviderError("MCP server needs a name and a command")
         with self._lock:
             configs = [c for c in self._mcp_configs() if c.get("name") != name]
-            entry = {"name": name, "command": command, "args": args or []}
+            entry = {"name": name, "command": command, "args": args or [], "autostart": True}
             if env:
                 entry["env"] = env
             configs.append(entry)
+            self.keys.data["mcp_servers"] = configs
+            self.keys.save()
+            self._reload_mcp()
+            return self.mcp_info()
+
+    def mcp_start(self, name) -> dict[str, Any]:
+        """Opt a (configured-but-stopped) server into autostart and (re)start it."""
+        with self._lock:
+            configs = [dict(c) for c in self._mcp_configs()]
+            for c in configs:
+                if c.get("name") == name:
+                    c["autostart"] = True
             self.keys.data["mcp_servers"] = configs
             self.keys.save()
             self._reload_mcp()
@@ -850,6 +880,8 @@ def _make_handler(service: AgentService):
                     self._json(200, service.mcp_add(
                         payload.get("name", ""), payload.get("command", ""),
                         args=args, env=payload.get("env")))
+                elif self.path == "/api/mcp/start":
+                    self._json(200, service.mcp_start(payload.get("name", "")))
                 elif self.path == "/api/mcp/remove":
                     self._json(200, service.mcp_remove(payload.get("name", "")))
                 elif self.path == "/api/mcp/restart":
@@ -1599,7 +1631,13 @@ async function loadMcp(){
     const badge=el('badge'); badge.textContent=(s.running?'running · ':'stopped · ')+s.tools+' tools'; t.appendChild(badge);
     c.appendChild(t);
     const cmd=el('muted', s.command+' '+(s.args||[]).join(' ')); cmd.style.fontSize='11px'; c.appendChild(cmd);
-    const acts=el('pacts'); const rm=document.createElement('button'); rm.textContent='Remove';
+    const acts=el('pacts');
+    if(!s.running){ const st=document.createElement('button'); st.textContent='Start';
+      st.onclick=async()=>{ st.disabled=true; st.textContent='starting…';
+        await fetch('/api/mcp/start',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({name:s.name})}); loadMcp(); loadInfo(); };
+      acts.appendChild(st); }
+    const rm=document.createElement('button'); rm.textContent='Remove';
     rm.onclick=async()=>{ await fetch('/api/mcp/remove',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({name:s.name})}); loadMcp(); loadInfo(); };
     acts.appendChild(rm); c.appendChild(acts); mcpList.appendChild(c);
