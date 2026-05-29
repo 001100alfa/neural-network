@@ -179,10 +179,12 @@ extra dependencies) that drives the same agent:
   and warns when nearing or over the cap.
 - an **MCP tab** — add / remove / restart [MCP](https://modelcontextprotocol.io)
   stdio servers from the dashboard; their tools are registered with the agent
-  live (also configurable in `.aio.toml`). Includes a built-in **catalog of
-  open-source MCP servers for coding/project work** (filesystem, git, github,
-  fetch, memory, sequential-thinking, sqlite, postgres, playwright, context7,
-  brave-search, …) — "Use" pre-fills the add form
+  live (also configurable in `.aio.toml`). Ships with **11 open-source servers
+  configured out of the box** (filesystem, fetch, memory, sequential-thinking,
+  everything, sqlite, postgres, playwright, context7, time, brave-search) —
+  listed but **not auto-started** (so launching never spawns 11 processes); hit
+  **Start** on the ones you want. A built-in **catalog** (incl. git, github, …)
+  lets you add more with "Use"
 - a **tools panel** with these tabs that work independently of the model:
   - **Editor** — an in-browser IDE: file tree, **multi-file tabs** (with
     unsaved-change indicators), **line numbers**, in-editor **find & replace**
