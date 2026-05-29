@@ -38,6 +38,9 @@ aio "add type hints to utils.py and run the tests"
 # Interactive REPL
 aio
 
+# Browser dashboard (web UI)
+aio --web                 # then open http://127.0.0.1:8765
+
 # 100% free & offline with a local model (needs `ollama serve` running)
 aio -p ollama -m qwen2.5-coder "explain what this repo does"
 ```
@@ -57,10 +60,33 @@ aio [options] [prompt]
       --allow-outside     permit file access outside the working dir
       --max-steps N       max agent steps per turn (default 50)
       --no-mcp            don't start configured MCP servers
+      --web               launch the browser dashboard instead of the CLI
+      --host HOST         web dashboard host (default 127.0.0.1)
+      --port PORT         web dashboard port (default 8765)
       --no-color          plain output
       --list-tools        list tools and exit
       --version
 ```
+
+## Web dashboard
+
+```bash
+aio --web --port 8765
+# open http://127.0.0.1:8765
+```
+
+A single-page dashboard (served by the Python stdlib — no JS build step, no
+extra dependencies) that drives the same agent:
+
+- chat with the agent and watch each step stream in: assistant messages, tool
+  calls, tool results, and **colour-coded diffs** for every file edit
+- sidebar listing the available tools and the working directory
+- switch **provider/model** on the fly and clear the conversation
+- small JSON API: `GET /api/info`, `POST /api/chat`, `POST /api/reset`,
+  `POST /api/config`
+
+> In web mode tool calls are **auto-approved** (there is no terminal to prompt),
+> so run it locally against projects you trust. It binds to `127.0.0.1` by default.
 
 ### REPL commands
 
@@ -132,6 +158,7 @@ src/aio/
 ├── agent.py          # the model<->tools loop
 ├── config.py         # layered TOML/env/flag configuration
 ├── ui.py             # colours, diffs, approval prompts
+├── web.py            # zero-dependency browser dashboard + JSON API
 ├── mcp.py            # minimal MCP stdio JSON-RPC client
 ├── providers/        # unified provider interface
 │   ├── base.py       #   Message / ToolCall / AssistantTurn + HTTP

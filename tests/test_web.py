@@ -1,0 +1,72 @@
+"""Tests for the web dashboard service layer (no socket binding)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from aio.providers import AssistantTurn, ToolCall
+from aio.web import AgentService, EventUI
+
+
+def _service(tmp_path: Path, monkeypatch) -> AgentService:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    from aio.config import load_config
+
+    cfg = load_config(workdir=tmp_path, overrides={"provider": "anthropic"})
+    return AgentService(cfg)
+
+
+class FakeProvider:
+    """Reads a file then finishes."""
+
+    def __init__(self):
+        self.step = 0
+
+    def chat(self, messages, tools=None, system=None):
+        self.step += 1
+        if self.step == 1:
+            return AssistantTurn(
+                content="reading",
+                tool_calls=[ToolCall(id="1", name="read_file", arguments={"path": "f.txt"})],
+            )
+        return AssistantTurn(content="all done", tool_calls=[])
+
+
+def test_event_ui_collects_events():
+    ui = EventUI()
+    ui.assistant("hi")
+    ui.tool_call("read_file", {"path": "x"})
+    ui.tool_result("contents")
+    ui.show_diff("a", "b", "f.txt")
+    types = [e["type"] for e in ui.drain()]
+    assert types == ["assistant", "tool_call", "tool_result", "diff"]
+    assert ui.events == []  # drained
+
+
+def test_service_info(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    info = svc.info()
+    assert info["provider"] == "anthropic"
+    assert any(t["name"] == "read_file" for t in info["tools"])
+
+
+def test_service_chat_collects_events(tmp_path, monkeypatch):
+    (tmp_path / "f.txt").write_text("hello world")
+    svc = _service(tmp_path, monkeypatch)
+    svc.agent.provider = FakeProvider()  # swap in offline provider
+
+    result = svc.chat("read f.txt")
+    types = [e["type"] for e in result["events"]]
+    assert "tool_call" in types
+    assert "tool_result" in types
+    assert result["final"] == "all done"
+    # tool actually ran against the workdir
+    tr = [e for e in result["events"] if e["type"] == "tool_result"][0]
+    assert "hello world" in tr["text"]
+
+
+def test_service_configure_switches_provider(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    info = svc.configure(provider="ollama", model="qwen2.5-coder")
+    assert info["provider"] == "ollama"
+    assert info["model"] == "qwen2.5-coder"
