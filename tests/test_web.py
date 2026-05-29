@@ -159,6 +159,22 @@ def test_import_roundtrip(tmp_path, monkeypatch):
     assert svc.conversations[res["conv"]][0].content == "remember me"
 
 
+def test_mcp_catalog(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    cat = svc.mcp_info()["catalog"]
+    names = {c["name"] for c in cat}
+    assert {"filesystem", "git", "github", "fetch", "memory",
+            "playwright", "context7", "sqlite", "postgres"} <= names
+    fs = next(c for c in cat if c["name"] == "filesystem")
+    assert fs["command"] == "npx" and "@modelcontextprotocol/server-filesystem" in fs["args"]
+    assert fs["installed"] is False
+    gh = next(c for c in cat if c["name"] == "github")
+    assert gh.get("env_hint") == "GITHUB_PERSONAL_ACCESS_TOKEN"
+    # the installed flag flips once a catalog server is configured
+    svc.mcp_add("filesystem", "npx", args=["-y", "@modelcontextprotocol/server-filesystem", "."])
+    assert next(c for c in svc.mcp_info()["catalog"] if c["name"] == "filesystem")["installed"] is True
+
+
 def test_mcp_add_list_remove(tmp_path, monkeypatch):
     svc = _service(tmp_path, monkeypatch)
     # a command that won't start; load_mcp_tools fails gracefully, config still records
