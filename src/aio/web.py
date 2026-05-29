@@ -426,6 +426,58 @@ class AgentService:
             f.unlink()
         return {"ok": True}
 
+    # -- export / import a conversation ----------------------------------
+    def export_session(self, conv_id: str = "default", fmt: str = "md") -> dict[str, Any]:
+        msgs = self.conversations.get(conv_id or "default", [])
+        if fmt == "json":
+            content = json.dumps(
+                {
+                    "provider": self.config.provider,
+                    "model": self.config.active.model,
+                    "messages": [_msg_to_dict(m) for m in msgs],
+                },
+                indent=2,
+            )
+            return {"filename": "conversation.json", "mime": "application/json", "content": content}
+        # markdown
+        lines = [f"# AIO conversation ({self.config.provider} / {self.config.active.model})", ""]
+        for m in msgs:
+            if m.role == "user":
+                lines += ["## 🧑 User", "", m.content or "", ""]
+                if m.images:
+                    lines += [f"_({len(m.images)} image attachment(s))_", ""]
+            elif m.role == "assistant":
+                lines += ["## 🤖 Assistant", ""]
+                if m.content:
+                    lines += [m.content, ""]
+                for tc in m.tool_calls:
+                    lines += [f"- 🔧 `{tc.name}` `{json.dumps(tc.arguments)}`"]
+                if m.tool_calls:
+                    lines += [""]
+            elif m.role == "tool":
+                body = (m.content or "")[:1000]
+                lines += ["> **tool result:**", "", "```", body, "```", ""]
+        return {"filename": "conversation.md", "mime": "text/markdown", "content": "\n".join(lines)}
+
+    def import_session(self, data: Any, conv_id: str | None = None) -> dict[str, Any]:
+        import time
+
+        if isinstance(data, dict):
+            raw = data.get("messages", [])
+            title = data.get("title")
+        elif isinstance(data, list):
+            raw, title = data, None
+        else:
+            return {"ok": False, "error": "import expects JSON with a 'messages' list"}
+        with self._lock:
+            cid = conv_id or f"imp{int(time.time() * 1000):x}"
+            self.conversations[cid] = [_msg_from_dict(m) for m in raw]
+            self._select_conv(cid)
+            return {
+                "ok": True, "conv": cid, "title": title or "imported",
+                "messages": [_msg_to_dict(m) for m in self.conversations[cid]],
+            }
+
     def configure(self, provider: str | None, model: str | None) -> dict[str, Any]:
         with self._lock:
             if provider:
@@ -761,6 +813,12 @@ def _make_handler(service: AgentService):
                         payload.get("id", ""), conv_id=payload.get("conv", "default")))
                 elif self.path == "/api/sessions/delete":
                     self._json(200, service.delete_session(payload.get("id", "")))
+                elif self.path == "/api/sessions/export":
+                    self._json(200, service.export_session(
+                        payload.get("conv", "default"), payload.get("format", "md")))
+                elif self.path == "/api/sessions/import":
+                    self._json(200, service.import_session(
+                        payload.get("data"), conv_id=payload.get("conv")))
                 elif self.path == "/api/exec":
                     self._json(200, service.exec_command(
                         payload.get("command", ""), payload.get("shell", "bash")))
@@ -828,10 +886,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
 <title>AIO — Coding Agent Dashboard</title>
 <style>
   :root{--bg:#0d1117;--panel:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;
-        --accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d29922;--mag:#bc8cff;}
+        --accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d29922;--mag:#bc8cff;--fz:14px;}
+  body.light{--bg:#ffffff;--panel:#f3f5f8;--border:#d0d7de;--text:#1f2328;--muted:#636c76;
+        --accent:#0969da;--green:#1a7f37;--red:#cf222e;--yellow:#9a6700;--mag:#8250df;}
   *{box-sizing:border-box}
-  body{margin:0;font:14px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  body{margin:0;font:var(--fz)/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
        background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column}
+  .settings{position:absolute;top:52px;right:14px;z-index:20;display:none;flex-direction:column;gap:10px;
+        background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 14px;min-width:200px;
+        box-shadow:0 6px 24px rgba(0,0,0,.4)}
+  .settings.on{display:flex}
+  .settings .srow{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:13px}
   header{display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid var(--border);
          background:var(--panel)}
   header h1{font-size:16px;margin:0;letter-spacing:.5px}
@@ -979,6 +1044,20 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <select id="sessionSel" title="saved sessions"><option value="">sessions…</option></select>
     <button id="loadSession">Load</button>
     <button id="reset">Clear</button>
+    <span class="sep">·</span>
+    <button id="exportMd" title="export as Markdown">⤓ MD</button>
+    <button id="exportJson" title="export as JSON">⤓ JSON</button>
+    <button id="importBtn" title="import a JSON conversation">Import</button>
+    <input id="importInput" type="file" accept="application/json,.json" style="display:none"/>
+    <button id="gearBtn" title="settings">⚙</button>
+  </div>
+  <div id="settingsPanel" class="settings">
+    <div class="srow"><span>Theme</span>
+      <select id="themeSel"><option value="dark">Dark</option><option value="light">Light</option></select>
+    </div>
+    <div class="srow"><span>Font size</span>
+      <span><button id="fzMinus">−</button> <span id="fzVal">14</span>px <button id="fzPlus">+</button></span>
+    </div>
   </div>
 </header>
 <div class="layout">
@@ -1297,6 +1376,49 @@ document.getElementById('loadSession').onclick=async()=>{
   if(d.ok){ renderHistory(d.messages); if(d.title && convs[activeConv]){convs[activeConv].title=d.title; renderConvTabs();} }
 };
 loadSessions();
+
+// ---- export / import a conversation ----
+function download(filename, content, mime){
+  const blob=new Blob([content],{type:mime||'text/plain'}); const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a);
+  a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+async function exportConv(fmt){
+  const r=await fetch('/api/sessions/export',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({conv:activeConv, format:fmt})});
+  const d=await r.json(); download(d.filename, d.content, d.mime);
+}
+document.getElementById('exportMd').onclick=()=>exportConv('md');
+document.getElementById('exportJson').onclick=()=>exportConv('json');
+document.getElementById('importBtn').onclick=()=>document.getElementById('importInput').click();
+document.getElementById('importInput').addEventListener('change',(e)=>{
+  const f=e.target.files[0]; if(!f) return; const rd=new FileReader();
+  rd.onload=async()=>{ let data; try{ data=JSON.parse(String(rd.result)); }catch(err){ alert('Not valid JSON'); return; }
+    const r=await fetch('/api/sessions/import',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({data})});
+    const d=await r.json();
+    if(d.ok){ const id=newConv(d.title||'imported'); switchConv(id); renderHistory(d.messages);
+      convs[id].html=log.innerHTML; }
+  };
+  rd.readAsText(f); e.target.value='';
+});
+
+// ---- settings: theme + font size (persisted in localStorage) ----
+function getSettings(){ try{ return JSON.parse(localStorage.getItem('aio_settings')||'{}'); }catch(_){ return {}; } }
+function applySettings(){
+  const s=getSettings(); const theme=s.theme||'dark'; const fz=s.font||14;
+  document.body.classList.toggle('light', theme==='light');
+  document.documentElement.style.setProperty('--fz', fz+'px');
+  const ts=document.getElementById('themeSel'); if(ts) ts.value=theme;
+  const fv=document.getElementById('fzVal'); if(fv) fv.textContent=fz;
+}
+function saveSettings(s){ localStorage.setItem('aio_settings', JSON.stringify(s)); applySettings(); }
+document.getElementById('gearBtn').onclick=()=>document.getElementById('settingsPanel').classList.toggle('on');
+document.getElementById('themeSel').onchange=(e)=>{ const s=getSettings(); s.theme=e.target.value; saveSettings(s); };
+document.getElementById('fzMinus').onclick=()=>{ const s=getSettings(); s.font=Math.max(11,(s.font||14)-1); saveSettings(s); };
+document.getElementById('fzPlus').onclick=()=>{ const s=getSettings(); s.font=Math.min(22,(s.font||14)+1); saveSettings(s); };
+applySettings();
+
 
 // ---- MCP panel ----
 const mcpList=document.getElementById('mcpList');

@@ -1,0 +1,44 @@
+name: Release
+
+# Build the package and a portable zip, then publish a GitHub Release whenever
+# a version tag (vX.Y.Z) is pushed. Uses no marketplace actions (the repo's
+# policy requires actions pinned to a full SHA): plain git + the runner's
+# preinstalled Python and `gh` CLI.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the tag (plain git)
+        run: |
+          git init -q .
+          git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          git -c protocol.version=2 fetch -q --depth 1 origin "$GITHUB_REF"
+          git checkout -q FETCH_HEAD
+
+      - name: Build wheel + sdist
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip build
+          .venv/bin/python -m build
+
+      - name: Portable zip (run straight from the folder, no install)
+        run: |
+          mkdir -p dist
+          git archive --format=zip --prefix="aio-${GITHUB_REF_NAME}/" \
+            -o "dist/aio-portable-${GITHUB_REF_NAME}.zip" HEAD
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --title "AIO ${GITHUB_REF_NAME}" \
+            --generate-notes
