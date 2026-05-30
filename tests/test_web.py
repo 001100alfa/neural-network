@@ -79,6 +79,18 @@ def test_import_message_tool_call():
     assert Message and ToolCall
 
 
+def test_plan_mode_and_memory(tmp_path, monkeypatch):
+    (tmp_path / "CLAUDE.md").write_text("project rule: be concise")
+    svc = _service(tmp_path, monkeypatch)
+    assert svc.info()["memory"] is True
+    svc.set_plan_mode(True)
+    assert svc.info()["plan_mode"] is True and svc.agent.plan_mode is True
+    # project memory is folded into the system prompt
+    assert "project rule: be concise" in svc.agent.system_prompt
+    svc.set_plan_mode(False)
+    assert svc.agent.plan_mode is False
+
+
 def test_conversations_are_isolated(tmp_path, monkeypatch):
     svc = _service(tmp_path, monkeypatch)
 
