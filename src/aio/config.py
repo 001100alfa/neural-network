@@ -140,6 +140,8 @@ class Config:
     mcp_servers: list[dict[str, Any]] = field(default_factory=list)
     #: project/instruction memory loaded from CLAUDE.md / AGENTS.md / .aio.md
     project_memory: str = ""
+    #: compact codebase overview (tree/langs/key files) for agent priming (#J)
+    project_map: str = ""
     #: PreToolUse/PostToolUse hooks (#6)
     hooks: list[dict[str, Any]] = field(default_factory=list)
     #: granular tool permissions: tool name -> allow|deny|ask
@@ -239,11 +241,24 @@ def load_config(
         system_prompt=file_cfg.get("system_prompt", DEFAULT_SYSTEM_PROMPT),
         mcp_servers=mcp_servers,
         project_memory=load_project_memory(workdir),
+        project_map=_load_project_map(workdir),
         hooks=file_cfg.get("hooks", []),
         permissions=file_cfg.get("permissions", {}) or {},
         output_style=file_cfg.get("output_style", "default"),
         telemetry=file_cfg.get("telemetry", {}) or {},
     )
+
+
+def _load_project_map(workdir: Path) -> str:
+    """Build the compact codebase overview (opt out with AIO_NO_PROJECT_MAP=1)."""
+    if os.environ.get("AIO_NO_PROJECT_MAP"):
+        return ""
+    try:
+        from .projectmap import build_project_map
+
+        return build_project_map(workdir)
+    except Exception:  # pragma: no cover - never block startup
+        return ""
 
 
 def load_project_memory(workdir: Path) -> str:

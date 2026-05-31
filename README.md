@@ -48,9 +48,15 @@ Requires Python **3.11+**.
 
 ## Agent behaviour (Claude Code-style)
 
+- **Codebase awareness** — at startup the agent is primed with an auto-generated
+  **project map** (gitignore-aware directory tree, language breakdown, key files)
+  so it's oriented in the repo from the first message (opt out with
+  `AIO_NO_PROJECT_MAP=1`).
 - **Project memory** — `CLAUDE.md`, `AGENTS.md` or `.aio.md` in the working
   directory (and a global `~/.config/aio/CLAUDE.md`) are auto-loaded into the
   system prompt; a 🧠 badge in the dashboard shows when memory is active.
+- **Atomic multi-edit** — a `multi_edit` tool applies several find/replace edits
+  to one file in order, all-or-nothing (no half-edited files).
 - **Context compaction** — long conversations are summarised automatically as
   they approach the context limit (recent turns kept verbatim) so sessions don't
   overflow the model's context window. Token estimates use a real tokenizer

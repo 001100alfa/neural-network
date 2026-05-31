@@ -292,6 +292,8 @@ class AgentService:
         for tool in self._mcp_tools:
             registry.register(tool)
         system_prompt = self.config.system_prompt + OUTPUT_STYLES.get(self.config.output_style, "")
+        if self.config.project_map:
+            system_prompt += "\n\n# Project map (auto-generated)\n" + self.config.project_map
         if self.config.project_memory:
             system_prompt += "\n\n# Project memory (CLAUDE.md / AGENTS.md)\n" + self.config.project_memory
         hooks = HookRunner(self.keys.data.get("hooks") or self.config.hooks, self.config.workdir)
