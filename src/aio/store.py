@@ -129,7 +129,7 @@ class SessionStore:
             return cur.rowcount > 0
 
     # -- reads ------------------------------------------------------------
-    def list(self) -> list[dict[str, Any]]:
+    def list_sessions(self) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT id,title,provider,model,updated,count FROM sessions "

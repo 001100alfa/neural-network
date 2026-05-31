@@ -60,6 +60,7 @@ class MCPServer:
             full_env = dict(os.environ)
             if self.env:
                 full_env.update(self.env)
+            assert self.command is not None  # stdio transport always has a command
             self._proc = subprocess.Popen(
                 [self.command, *self.args],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -125,6 +126,7 @@ class MCPServer:
         headers = {"content-type": "application/json",
                    "accept": "application/json, text/event-stream"}
         headers.update(self.headers)
+        assert self.url is not None  # only called on the http transport
         req = urllib.request.Request(
             self.url, data=json.dumps(payload).encode("utf-8"),
             headers=headers, method="POST",

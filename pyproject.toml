@@ -21,7 +21,7 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "pyflakes>=3"]
+dev = ["pytest>=7", "pyflakes>=3", "mypy>=1.8"]
 
 [project.urls]
 Homepage = "https://github.com/001100alfa/neural-network"
@@ -38,3 +38,9 @@ aio = ["static/*.html", "static/*.css", "static/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.mypy]
+files = ["src"]
+ignore_missing_imports = true
+# Pragmatic baseline: catches real type errors without demanding full
+# annotations across a stdlib-only codebase. Tighten incrementally.

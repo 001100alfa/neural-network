@@ -18,7 +18,7 @@ def test_save_list_get_delete(tmp_path):
     s.save(_payload("a", "First", ["hello world"], updated=100))
     s.save(_payload("b", "Second", ["the quick brown fox"], updated=200))
 
-    listed = s.list()
+    listed = s.list_sessions()
     assert [r["id"] for r in listed] == ["b", "a"]          # ordered by updated DESC
     assert listed[0]["title"] == "Second" and listed[0]["count"] == 1
     assert set(listed[0]) == {"id", "title", "provider", "model", "updated", "count"}
@@ -29,7 +29,7 @@ def test_save_list_get_delete(tmp_path):
 
     assert s.delete("a") is True
     assert s.delete("a") is False                           # already gone
-    assert [r["id"] for r in s.list()] == ["b"]
+    assert [r["id"] for r in s.list_sessions()] == ["b"]
 
 
 def test_upsert_preserves_created_and_replaces_body(tmp_path):
@@ -92,7 +92,7 @@ def test_migrate_legacy_json(tmp_path):
     s = SessionStore(tmp_path / "sessions.db")
     n = s.migrate_legacy(tmp_path)
     assert n == 2                                  # broken file skipped
-    ids = {r["id"] for r in s.list()}
+    ids = {r["id"] for r in s.list_sessions()}
     assert "old1" in ids and "old2" in ids          # missing id derived from filename
     assert s.get("old1")["messages"][0]["content"] == "migrate me"
     # running again is a no-op (DB already populated)
@@ -145,4 +145,4 @@ def test_concurrent_saves_are_safe(tmp_path):
         t.start()
     for t in threads:
         t.join()
-    assert len(s.list()) == 100                     # 5 workers x 20, no lost/corrupt rows
+    assert len(s.list_sessions()) == 100                     # 5 workers x 20, no lost/corrupt rows

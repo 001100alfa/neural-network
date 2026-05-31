@@ -160,6 +160,7 @@ class CodeSearcher:
             self.idf[term] = math.log(1 + (n - df + 0.5) / (df + 0.5))
 
     def _embed_chunks(self) -> None:  # pragma: no cover - exercised via fake in tests
+        assert self.embed_fn is not None
         vectors = self.embed_fn([c.text for c in self.chunks])
         for chunk, vec in zip(self.chunks, vectors):
             chunk.embedding = vec
@@ -195,7 +196,7 @@ class CodeSearcher:
         use_semantic = (semantic is None and self.embed_fn is not None) or bool(semantic)
         use_semantic = use_semantic and any(c.embedding is not None for c in self.chunks)
 
-        if use_semantic:
+        if use_semantic and self.embed_fn is not None:
             qvec = self.embed_fn([query])[0]
             sims = [
                 _cosine(qvec, c.embedding) if c.embedding is not None else 0.0

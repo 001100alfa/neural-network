@@ -43,5 +43,8 @@ jobs:
       - name: Lint (pyflakes)
         run: python -m pyflakes src tests
 
+      - name: Type-check (mypy)
+        run: python -m mypy
+
       - name: Run tests
         run: python -m pytest -q

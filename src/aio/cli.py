@@ -74,7 +74,7 @@ def _make_agent(config, ui: UI, no_mcp: bool, plan_mode: bool = False, per_hunk:
     provider = build_provider(config)
     registry = default_registry()
 
-    mcp_servers = []
+    mcp_servers: list = []
     if not no_mcp and config.mcp_servers:
         mcp_tools, mcp_servers = load_mcp_tools(config.mcp_servers, ui=ui)
         for t in mcp_tools:

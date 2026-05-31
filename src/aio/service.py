@@ -9,22 +9,20 @@ handler in :mod:`aio.web` and the underlying :class:`aio.agent.Agent`.
 from __future__ import annotations
 
 import difflib
-import functools
-import json
-import os
-import shutil
-import subprocess
 import threading
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from typing import Any
 
 from .agent import Agent
 from .catalog import DEFAULT_MCP_SERVERS, MCP_CATALOG
 from .config import PROVIDER_DEFAULTS, Config, KeyStore
 from .pricing import estimate_cost
+from .providers import ProviderError, build_provider
+from .service_panels import PanelsMixin
+from .service_providers import ProvidersMixin
+from .service_sessions import SessionsMixin
 from .tokens import active_backend as _token_backend
-from .providers import Message, ProviderError, ToolCall, build_provider
-from .tools import ToolContext, ToolError, default_registry
+from .tools import ToolContext, default_registry
 
 
 class EventUI:
@@ -145,31 +143,12 @@ def _extract_doc_text(name: str, data: bytes) -> str:
         return data.decode("utf-8", "replace")
 
 
-def _msg_to_dict(m: Message) -> dict[str, Any]:
-    return {
-        "role": m.role,
-        "content": m.content,
-        "tool_calls": [{"id": c.id, "name": c.name, "arguments": c.arguments} for c in m.tool_calls],
-        "tool_call_id": m.tool_call_id,
-        "name": m.name,
-    }
+class AgentService(SessionsMixin, ProvidersMixin, PanelsMixin):
+    """Thread-safe wrapper around an Agent for the web server.
 
-
-def _msg_from_dict(d: dict[str, Any]) -> Message:
-    return Message(
-        role=d.get("role", "user"),
-        content=d.get("content", "") or "",
-        tool_calls=[
-            ToolCall(id=c.get("id", ""), name=c.get("name", ""), arguments=c.get("arguments", {}) or {})
-            for c in d.get("tool_calls", []) or []
-        ],
-        tool_call_id=d.get("tool_call_id"),
-        name=d.get("name"),
-    )
-
-
-class AgentService:
-    """Thread-safe wrapper around an Agent for the web server."""
+    Behaviour is split across mixins (see service_sessions/providers/panels);
+    this class owns construction, the agent loop, approvals and core state.
+    """
 
     def __init__(self, config: Config, gated: bool = True) -> None:
         self.config = config
@@ -609,7 +588,7 @@ class AgentService:
         running = {getattr(s, "name", None) for s in self._mcp_servers}
         servers = []
         for c in self._mcp_configs():
-            nm = c.get("name")
+            nm = c.get("name") or ""
             servers.append({
                 "name": nm, "command": c.get("command", ""), "args": c.get("args", []),
                 "running": nm in running, "tools": counts.get(nm, 0),
@@ -656,373 +635,3 @@ class AgentService:
         with self._lock:
             self._reload_mcp()
             return self.mcp_info()
-
-    # -- sessions: save / load conversation history ----------------------
-    @staticmethod
-    def _sessions_dir():
-        from pathlib import Path
-
-        env = os.environ.get("AIO_SESSIONS_DIR")
-        d = Path(env) if env else (Path.home() / ".config" / "aio" / "sessions")
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-
-    def _session_store(self):
-        """Lazily open the SQLite store, importing any legacy JSON once."""
-        if self._store is None:
-            from .store import SessionStore
-
-            sdir = self._sessions_dir()
-            self._store = SessionStore(sdir / "sessions.db")
-            self._store.migrate_legacy(sdir)
-        return self._store
-
-    def _restore_conversations(self) -> None:
-        """Reload auto-persisted conversations so tabs survive a restart/crash."""
-        try:
-            saved = self._session_store().load_conversations()
-        except Exception:  # pragma: no cover - never block startup on the store
-            return
-        for conv_id, payload in saved.items():
-            msgs = [_msg_from_dict(m) for m in payload.get("messages", [])]
-            if msgs:
-                self.conversations[conv_id] = msgs
-                self._summaries[conv_id] = payload.get("summary", "")
-
-    def _persist_conversation(self, conv_id: str) -> None:
-        """Snapshot a conversation's working state to the store after a turn."""
-        import time as _t
-
-        conv_id = conv_id or "default"
-        try:
-            msgs = self.conversations.get(conv_id, [])
-            self._session_store().save_conversation(conv_id, {
-                "messages": [_msg_to_dict(m) for m in msgs],
-                "summary": self._summaries.get(conv_id, ""),
-                "provider": self.config.provider,
-                "model": self.config.active.model,
-                "updated": _t.time(),
-            })
-        except Exception:  # pragma: no cover - persistence must never break a turn
-            pass
-
-    def save_session(self, title: str | None = None, session_id: str | None = None,
-                     conv_id: str = "default") -> dict[str, Any]:
-        import time
-
-        with self._lock:
-            self._select_conv(conv_id)
-            msgs = self.agent.messages
-            if not title:
-                first = next((m.content for m in msgs if m.role == "user" and m.content), "")
-                title = (first[:48] + "…") if len(first) > 48 else (first or "session")
-            sid = session_id or f"{int(time.time() * 1000):x}"
-            self._session_store().save({
-                "id": sid,
-                "title": title,
-                "provider": self.config.provider,
-                "model": self.config.active.model,
-                "updated": time.time(),
-                "messages": [_msg_to_dict(m) for m in msgs],
-            })
-            return {"ok": True, "id": sid, "title": title, "count": len(msgs)}
-
-    def list_sessions(self) -> dict[str, Any]:
-        return {"sessions": self._session_store().list()}
-
-    def search_sessions(self, query: str) -> dict[str, Any]:
-        """Full-text search across saved sessions (title + message content)."""
-        return {"results": self._session_store().search(query)}
-
-    def load_session(self, session_id: str, conv_id: str = "default") -> dict[str, Any]:
-        with self._lock:
-            d = self._session_store().get(session_id)
-            if d is None:
-                return {"ok": False, "error": "session not found"}
-            conv_id = conv_id or "default"
-            self.conversations[conv_id] = [_msg_from_dict(m) for m in d.get("messages", [])]
-            self._select_conv(conv_id)
-            return {"ok": True, "id": session_id, "title": d.get("title", ""),
-                    "messages": d.get("messages", [])}
-
-    def delete_session(self, session_id: str) -> dict[str, Any]:
-        self._session_store().delete(session_id)
-        return {"ok": True}
-
-    # -- export / import a conversation ----------------------------------
-    def export_session(self, conv_id: str = "default", fmt: str = "md") -> dict[str, Any]:
-        msgs = self.conversations.get(conv_id or "default", [])
-        if fmt == "json":
-            content = json.dumps(
-                {
-                    "provider": self.config.provider,
-                    "model": self.config.active.model,
-                    "messages": [_msg_to_dict(m) for m in msgs],
-                },
-                indent=2,
-            )
-            return {"filename": "conversation.json", "mime": "application/json", "content": content}
-        # markdown
-        lines = [f"# AIO conversation ({self.config.provider} / {self.config.active.model})", ""]
-        for m in msgs:
-            if m.role == "user":
-                lines += ["## 🧑 User", "", m.content or "", ""]
-                if m.images:
-                    lines += [f"_({len(m.images)} image attachment(s))_", ""]
-            elif m.role == "assistant":
-                lines += ["## 🤖 Assistant", ""]
-                if m.content:
-                    lines += [m.content, ""]
-                for tc in m.tool_calls:
-                    lines += [f"- 🔧 `{tc.name}` `{json.dumps(tc.arguments)}`"]
-                if m.tool_calls:
-                    lines += [""]
-            elif m.role == "tool":
-                body = (m.content or "")[:1000]
-                lines += ["> **tool result:**", "", "```", body, "```", ""]
-        return {"filename": "conversation.md", "mime": "text/markdown", "content": "\n".join(lines)}
-
-    def import_session(self, data: Any, conv_id: str | None = None) -> dict[str, Any]:
-        import time
-
-        if isinstance(data, dict):
-            raw = data.get("messages", [])
-            title = data.get("title")
-        elif isinstance(data, list):
-            raw, title = data, None
-        else:
-            return {"ok": False, "error": "import expects JSON with a 'messages' list"}
-        with self._lock:
-            cid = conv_id or f"imp{int(time.time() * 1000):x}"
-            self.conversations[cid] = [_msg_from_dict(m) for m in raw]
-            self._select_conv(cid)
-            return {
-                "ok": True, "conv": cid, "title": title or "imported",
-                "messages": [_msg_to_dict(m) for m in self.conversations[cid]],
-            }
-
-    def configure(self, provider: str | None, model: str | None) -> dict[str, Any]:
-        with self._lock:
-            if provider:
-                if provider not in PROVIDER_DEFAULTS:
-                    raise ProviderError(f"unknown provider '{provider}'")
-                self.config.provider = provider
-                self.keys.set_active(provider)
-            if model:
-                self.config.active.model = model
-                self.keys.set(self.config.provider, model=model)
-            self._build_agent()
-            return self.info()
-
-    # -- AI providers / API keys panel -----------------------------------
-    @staticmethod
-    def _mask(key: str | None) -> str:
-        if not key:
-            return ""
-        return ("•" * max(0, len(key) - 4)) + key[-4:] if len(key) > 4 else "••••"
-
-    def providers_info(self) -> dict[str, Any]:
-        """List every provider with masked key + configuration (never the raw key)."""
-        out = []
-        month = self._month()
-        for name, d in PROVIDER_DEFAULTS.items():
-            pc = self.config.providers[name]
-            env_set = bool(d["env"] and os.environ.get(d["env"]))
-            stored = bool(self.keys.get(name).get("api_key"))
-            needs_key = d["env"] is not None
-            budget = self.keys.get_budget(name)
-            spent = self.keys.monthly(name, month).get("spent_usd", 0.0)
-            out.append(
-                {
-                    "name": name,
-                    "label": d["label"],
-                    "model": pc.model,
-                    "base_url": pc.base_url,
-                    "env": d["env"],
-                    "needs_key": needs_key,
-                    "key_masked": self._mask(pc.api_key),
-                    "configured": (not needs_key) or bool(pc.api_key),
-                    "source": "stored" if stored else ("env" if env_set else ""),
-                    "active": name == self.config.provider,
-                    "budget_usd": budget,
-                    "month_spent_usd": round(spent, 6),
-                    "over_budget": bool(budget > 0 and spent >= budget),
-                    "near_budget": bool(budget > 0 and 0.8 * budget <= spent < budget),
-                }
-            )
-        return {"active": self.config.provider, "providers": out, "usage": self.usage_info()}
-
-    def test_provider(self, name: str) -> dict[str, Any]:
-        """Validate the key by listing models; returns {ok, models, count, error}."""
-        if name not in PROVIDER_DEFAULTS:
-            raise ProviderError(f"unknown provider '{name}'")
-        from .providers import build_provider as _bp
-
-        cfg_provider = self.config.provider
-        try:
-            self.config.provider = name  # build_provider reads config.active
-            provider = _bp(self.config)
-            models = provider.list_models()
-        except ProviderError as exc:
-            return {"ok": False, "error": str(exc), "models": [], "count": 0}
-        except Exception as exc:  # pragma: no cover - defensive
-            return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "models": [], "count": 0}
-        finally:
-            self.config.provider = cfg_provider
-        return {"ok": True, "count": len(models), "models": models[:100], "error": ""}
-
-    def set_provider_key(
-        self,
-        name: str,
-        api_key: str | None = None,
-        model: str | None = None,
-        base_url: str | None = None,
-        make_active: bool = False,
-        budget: float | None = None,
-    ) -> dict[str, Any]:
-        with self._lock:
-            if name not in PROVIDER_DEFAULTS:
-                raise ProviderError(f"unknown provider '{name}'")
-            self.keys.set(name, api_key=api_key, model=model, base_url=base_url)
-            if budget is not None:
-                self.keys.set_budget(name, budget)
-            # reflect immediately on the live config
-            pc = self.config.providers[name]
-            if api_key is not None:
-                pc.api_key = api_key or (
-                    os.environ.get(PROVIDER_DEFAULTS[name]["env"] or "") or None
-                )
-            if model:
-                pc.model = model
-            if base_url:
-                pc.base_url = base_url
-            if make_active:
-                self.config.provider = name
-                self.keys.set_active(name)
-            self._build_agent()
-            return self.providers_info()
-
-    # -- Terminal (cmd / bash) -------------------------------------------
-    def exec_command(self, command: str, shell: str = "bash", timeout: int = 120) -> dict[str, Any]:
-        """Run a command directly in the working directory (not via the model)."""
-
-        command = (command or "").strip()
-        if not command:
-            return {"output": "", "exit_code": 0}
-        exe = shutil.which(shell)
-        try:
-            if exe:
-                proc = subprocess.run(
-                    [exe, "-c", command], cwd=str(self.config.workdir),
-                    capture_output=True, text=True, timeout=timeout,
-                )
-            else:
-                proc = subprocess.run(
-                    command, shell=True, cwd=str(self.config.workdir),
-                    capture_output=True, text=True, timeout=timeout,
-                )
-        except subprocess.TimeoutExpired:
-            return {"output": f"command timed out after {timeout}s", "exit_code": 124}
-        out = (proc.stdout or "") + (proc.stderr or "")
-        return {"output": out, "exit_code": proc.returncode}
-
-    # -- Git --------------------------------------------------------------
-    def _run_git(self, args: list[str]) -> str:
-        try:
-            proc = subprocess.run(
-                ["git", *args], cwd=str(self.config.workdir),
-                capture_output=True, text=True, timeout=60,
-            )
-        except FileNotFoundError:
-            return "git is not installed or not on PATH."
-        return ((proc.stdout or "") + (proc.stderr or "")).strip() or "(no output)"
-
-    def git_action(self, action: str, message: str = "", pathspec: str = "-A") -> dict[str, Any]:
-        presets = {
-            "status": ["status", "--short", "--branch"],
-            "diff": ["diff"],
-            "diff_staged": ["diff", "--staged"],
-            "log": ["log", "--oneline", "-15"],
-            "add": ["add", pathspec or "-A"],
-        }
-        if action == "commit":
-            self._run_git(["add", pathspec or "-A"])
-            return {"output": self._run_git(["commit", "-m", message or "update"])}
-        if action not in presets:
-            return {"output": f"unknown git action: {action}"}
-        return {"output": self._run_git(presets[action])}
-
-    # -- Static preview web server ---------------------------------------
-    def server_status(self) -> dict[str, Any]:
-        running = self._static_httpd is not None
-        return {
-            "running": running,
-            "port": self._static_port if running else None,
-            "url": f"http://{self._static_host}:{self._static_port}" if running else None,
-        }
-
-    def server_start(self, port: int = 8080) -> dict[str, Any]:
-        with self._lock:
-            if self._static_httpd is not None:
-                return self.server_status()
-            handler = functools.partial(
-                SimpleHTTPRequestHandler, directory=str(self.config.workdir)
-            )
-            httpd = ThreadingHTTPServer((self._static_host, int(port)), handler)
-            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-            thread.start()
-            self._static_httpd = httpd
-            self._static_thread = thread
-            self._static_port = int(port)
-            return self.server_status()
-
-    def server_stop(self) -> dict[str, Any]:
-        with self._lock:
-            if self._static_httpd is not None:
-                self._static_httpd.shutdown()
-                self._static_httpd.server_close()
-                self._static_httpd = None
-                self._static_thread = None
-                self._static_port = None
-            return self.server_status()
-
-    # -- Editor (in-browser IDE) -----------------------------------------
-    def fs_tree(self, limit: int = 1000) -> dict[str, Any]:
-        from .tools.search import IGNORE_DIRS
-
-        root = self.config.workdir
-        files: list[str] = []
-        for p in sorted(root.rglob("*")):
-            if p.is_dir():
-                continue
-            rel_parts = p.relative_to(root).parts
-            if any(part in IGNORE_DIRS for part in rel_parts):
-                continue
-            files.append(str(p.relative_to(root)))
-            if len(files) >= limit:
-                break
-        return {"root": str(root), "files": files}
-
-    def fs_read(self, path: str) -> dict[str, Any]:
-        try:
-            p = self.agent.ctx.safe_path(path)
-        except ToolError as exc:
-            return {"error": str(exc)}
-        if not p.is_file():
-            return {"error": f"not a file: {path}"}
-        try:
-            content = p.read_text("utf-8")
-        except UnicodeDecodeError:
-            return {"error": f"binary file (cannot edit as text): {path}"}
-        return {"path": path, "content": content}
-
-    def fs_write(self, path: str, content: str) -> dict[str, Any]:
-        try:
-            p = self.agent.ctx.safe_path(path)
-        except ToolError as exc:
-            return {"error": str(exc)}
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content, encoding="utf-8")
-        return {"ok": True, "path": path, "bytes": len(content)}
-
-

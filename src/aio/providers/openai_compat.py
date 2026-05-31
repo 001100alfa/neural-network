@@ -92,7 +92,8 @@ class OpenAICompatProvider(Provider):
                 out.append(msg)
             else:  # user
                 if m.images:
-                    parts = [{"type": "text", "text": m.content}] if m.content else []
+                    parts: list[dict[str, Any]] = (
+                        [{"type": "text", "text": m.content}] if m.content else [])
                     for img in m.images:
                         url = f"data:{img.get('media_type', 'image/png')};base64,{img.get('data', '')}"
                         parts.append({"type": "image_url", "image_url": {"url": url}})
