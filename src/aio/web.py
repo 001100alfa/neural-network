@@ -152,6 +152,9 @@ def _make_handler(service: AgentService, guard: "WebGuard | None" = None):
                         payload.get("message", ""),
                         images=payload.get("images"), conv_id=payload.get("conv", "default"),
                         files=payload.get("files")))
+                elif self.path == "/api/approve":
+                    self._json(200, service.resolve_approval(
+                        payload.get("id", ""), payload.get("decision", "no")))
                 elif self.path == "/api/reset":
                     self._json(200, service.reset(payload.get("conv", "default")))
                 elif self.path == "/api/conversation/close":
@@ -241,9 +244,9 @@ def _make_handler(service: AgentService, guard: "WebGuard | None" = None):
 
 def serve(
     config: Config, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = False,
-    token: str | None = None, require_auth: bool = True,
+    token: str | None = None, require_auth: bool = True, auto_approve: bool = False,
 ) -> None:
-    service = AgentService(config)
+    service = AgentService(config, gated=not auto_approve)
     if not require_auth:
         token = None
     elif token is None:
@@ -265,7 +268,10 @@ def serve(
         print("WARNING: authentication is DISABLED (--web-no-auth). Anyone who can "
               "reach this port can run shell and file tools.")
     print(f"provider={config.provider}  model={config.active.model}  workdir={config.workdir}")
-    print("tool calls are auto-approved in web mode. Ctrl+C to stop.")
+    if auto_approve:
+        print("WARNING: tool calls are AUTO-APPROVED (--web-auto-approve). Ctrl+C to stop.")
+    else:
+        print("side-effecting tool calls require approval in the dashboard. Ctrl+C to stop.")
     if open_browser:
         import threading
         import webbrowser

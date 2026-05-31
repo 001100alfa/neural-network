@@ -35,6 +35,54 @@ def new_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+class ApprovalBroker:
+    """Coordinates human tool-approval decisions across request threads.
+
+    The agent loop runs in one thread (the streaming request) and blocks in
+    :meth:`wait` for a decision delivered by another thread (the ``/api/approve``
+    request). The default on timeout is ``"no"`` — fail closed, never run a
+    side-effecting tool just because the user walked away.
+    """
+
+    def __init__(self, timeout: float = 300.0) -> None:
+        self.timeout = timeout
+        self._pending: dict[str, dict] = {}
+        self._lock = threading.Lock()
+        self._counter = 0
+
+    def open(self) -> str:
+        with self._lock:
+            self._counter += 1
+            rid = f"appr-{self._counter}-{secrets.token_hex(4)}"
+            self._pending[rid] = {"event": threading.Event(), "decision": "no"}
+            return rid
+
+    def wait(self, rid: str) -> str:
+        slot = self._pending.get(rid)
+        if slot is None:
+            return "no"
+        signalled = slot["event"].wait(self.timeout)
+        with self._lock:
+            slot = self._pending.pop(rid, None)
+        if not signalled or slot is None:
+            return "no"          # timed out / cancelled -> deny (fail closed)
+        return slot["decision"]
+
+    def resolve(self, rid: str, decision: str) -> bool:
+        decision = decision if decision in ("yes", "no", "always") else "no"
+        with self._lock:
+            slot = self._pending.get(rid)
+            if slot is None:
+                return False
+            slot["decision"] = decision
+            slot["event"].set()
+            return True
+
+    def pending_ids(self) -> list[str]:
+        with self._lock:
+            return list(self._pending)
+
+
 def loopback_allowlist() -> set[str]:
     return set(LOOPBACK_HOSTS)
 

@@ -34,11 +34,13 @@ class EventUI:
     in wherever a terminal :class:`aio.ui.UI` is expected.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, broker=None) -> None:
         self.events: list[dict[str, Any]] = []
         # Optional live callback: when set, each event is delivered immediately
         # (used for Server-Sent Events streaming) in addition to being stored.
         self.sink = None
+        # ApprovalBroker for the interactive tool-approval gate (web mode).
+        self._broker = broker
 
     def drain(self) -> list[dict[str, Any]]:
         out = self.events
@@ -97,9 +99,21 @@ class EventUI:
         self._emit({"type": "diff", "path": path, "diff": diff})
 
     def confirm(self, name: str, args: dict) -> str:
-        # No interactive prompt available over HTTP; auto-approve.
-        self.tool_call(name, args)
-        return "yes"
+        # Without a broker, or with no live stream to ask over, we can't run an
+        # interactive prompt -> approve (the non-streaming fallback path).
+        if self._broker is None or self.sink is None:
+            self.tool_call(name, args)
+            return "yes"
+        # Gated: ask the browser and block this turn until it answers (or the
+        # broker times out, which denies). Read-only tools never reach here
+        # because they set needs_approval = False.
+        rid = self._broker.open()
+        self._emit({"type": "tool_approval", "id": rid, "name": name, "args": args})
+        decision = self._broker.wait(rid)
+        self._emit({"type": "tool_approval_resolved", "id": rid, "decision": decision})
+        if decision in ("yes", "always"):
+            self.tool_call(name, args)
+        return decision
 
 
 
@@ -157,9 +171,15 @@ def _msg_from_dict(d: dict[str, Any]) -> Message:
 class AgentService:
     """Thread-safe wrapper around an Agent for the web server."""
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, gated: bool = True) -> None:
         self.config = config
-        self.ui = EventUI()
+        # Tool-approval gate: when gated (default), side-effecting tools must be
+        # approved over the live stream; otherwise they auto-approve (legacy).
+        from .security import ApprovalBroker
+
+        self.gated = bool(gated)
+        self._approvals = ApprovalBroker()
+        self.ui = EventUI(self._approvals)
         self._lock = threading.Lock()
         self._usage_lock = threading.Lock()  # guards self.usage across concurrent chats
         # API keys entered via the dashboard are persisted here and overlaid on
@@ -208,7 +228,9 @@ class AgentService:
         ctx = ToolContext(
             workdir=self.config.workdir,
             ui=ui,
-            auto_approve=True,  # web mode auto-approves tool calls
+            # gated mode -> route side-effecting tools through the approval gate;
+            # auto mode -> approve everything (opt-in, legacy behaviour).
+            auto_approve=not self.gated,
             allow_outside_workdir=self.config.allow_outside_workdir,
             checkpoints=self._checkpoints,
             todos=self._todos,
@@ -257,7 +279,8 @@ class AgentService:
         if agent is None:
             # share the default agent's (possibly overridden) provider
             prov = getattr(getattr(self, "agent", None), "provider", None)
-            agent = self._make_agent_for(EventUI(), msgs, self._summaries.get(conv_id, ""), provider=prov)
+            agent = self._make_agent_for(EventUI(self._approvals), msgs,
+                                         self._summaries.get(conv_id, ""), provider=prov)
             self._conv_agents[conv_id] = agent
         else:
             agent.messages = msgs
@@ -316,6 +339,7 @@ class AgentService:
             "cache": self.config.active.cache,
             "output_style": self.config.output_style,
             "token_backend": _token_backend(),
+            "tool_approval": "gated" if self.gated else "auto",
         }
 
     def set_plan_mode(self, on: bool) -> dict[str, Any]:
@@ -490,6 +514,11 @@ class AgentService:
             self._accumulate_usage(agent)
             self._persist_conversation(conv_id)
             emit({"type": "done", "final": final, "usage": self.usage_info()})
+
+    def resolve_approval(self, request_id: str, decision: str) -> dict[str, Any]:
+        """Record a user's allow/deny/always decision for a pending tool call."""
+        ok = self._approvals.resolve(request_id or "", decision or "no")
+        return {"ok": ok}
 
     def _accumulate_usage(self, agent=None) -> None:
         ru = getattr(agent or self.agent, "run_usage", None) or {}

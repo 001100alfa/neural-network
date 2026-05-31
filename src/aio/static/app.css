@@ -45,6 +45,12 @@
   .event .head{padding:6px 10px;background:var(--hover);color:var(--accent)}
   .event .body{padding:8px 10px;white-space:pre-wrap;color:var(--muted);max-height:260px;overflow:auto}
   .event.err .head{color:var(--red)}
+  .event.appr{border-color:var(--yellow)} .event.appr .head{color:var(--yellow)}
+  .appr-actions{display:flex;gap:8px;padding:8px 10px}
+  .appr-actions button{padding:4px 12px;border:1px solid var(--border);border-radius:6px;
+        background:var(--field);color:var(--text);cursor:pointer;font-size:12px}
+  .appr-actions button:hover{background:var(--hover)}
+  .appr-actions button:disabled{opacity:.5;cursor:default}
   .diff .add{color:var(--green)} .diff .del{color:var(--red)} .diff .hunk{color:var(--accent)}
   .thinking{color:var(--muted);font-style:italic;align-self:flex-start}
   footer{border-top:1px solid var(--border);padding:12px;display:flex;gap:10px;background:var(--panel)}

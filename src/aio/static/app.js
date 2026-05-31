@@ -63,6 +63,27 @@ function addEvent(ev){
     const wrap=el('event'+(ev.type==='error'?' err':'')); wrap.appendChild(Object.assign(el('head'),{textContent:ev.type}));
     wrap.appendChild(Object.assign(el('body'),{textContent:ev.text})); log.appendChild(wrap); scroll(); return;
   }
+  if(ev.type==='tool_approval'){ renderApproval(ev); return; }
+  if(ev.type==='tool_approval_resolved'){
+    const box=document.getElementById('appr-'+ev.id);
+    if(box){ box.querySelector('.appr-actions').remove();
+      box.appendChild(Object.assign(el('body'),{textContent:'decision: '+ev.decision})); }
+    return;
+  }
+}
+function renderApproval(ev){
+  const wrap=el('event appr'); wrap.id='appr-'+ev.id;
+  wrap.appendChild(Object.assign(el('head'),
+    {textContent:'⚠ approve '+ev.name+'('+Object.entries(ev.args||{}).map(([k,v])=>k+'='+short(v)).join(', ')+')'}));
+  const act=el('appr-actions');
+  const mk=(label,decision)=>{ const b=document.createElement('button'); b.textContent=label;
+    b.onclick=()=>{ act.querySelectorAll('button').forEach(x=>x.disabled=true);
+      fetch('/api/approve',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id:ev.id,decision})}); }; return b; };
+  act.appendChild(mk('Approve','yes'));
+  act.appendChild(mk('Always','always'));
+  act.appendChild(mk('Deny','no'));
+  wrap.appendChild(act); log.appendChild(wrap); scroll();
 }
 function short(v){v=String(v).replace(/\n/g,'\\n');return v.length>60?v.slice(0,60)+'…':v;}
 

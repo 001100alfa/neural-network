@@ -50,6 +50,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Use this access token for the dashboard instead of a random one.")
     p.add_argument("--web-no-auth", action="store_true",
                    help="Disable dashboard authentication (UNSAFE; only on a trusted, isolated host).")
+    p.add_argument("--web-auto-approve", action="store_true",
+                   help="Auto-approve all tool calls in the dashboard (UNSAFE; skips the approval gate).")
     p.add_argument("--plan", action="store_true", help="Plan mode: read-only; produce a plan, change nothing.")
     p.add_argument("-c", "--continue", dest="cont", action="store_true",
                    help="Resume the most recent CLI conversation.")
@@ -224,7 +226,8 @@ def main(argv: list[str] | None = None) -> int:
         from .web import serve
 
         serve(config, host=args.host, port=args.port, open_browser=args.open,
-              token=args.web_token, require_auth=not args.web_no_auth)
+              token=args.web_token, require_auth=not args.web_no_auth,
+              auto_approve=args.web_auto_approve)
         return 0
 
     agent, mcp_servers = _make_agent(config, ui, no_mcp=args.no_mcp, plan_mode=args.plan,
