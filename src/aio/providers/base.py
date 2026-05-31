@@ -77,6 +77,7 @@ class Provider(ABC):
         extra: dict[str, Any] | None = None,
         cache: bool = True,
         thinking_tokens: int = 0,
+        max_retries: int = 3,
     ) -> None:
         self.model = model
         self.api_key = api_key
@@ -84,10 +85,12 @@ class Provider(ABC):
         self.timeout = timeout
         self.max_tokens = max_tokens
         self.extra = extra or {}
-        #: enable provider prompt caching where supported (#8)
+        #: enable provider prompt caching where supported
         self.cache = cache
-        #: extended-thinking budget in tokens (0 = off) (#9)
+        #: extended-thinking budget in tokens (0 = off)
         self.thinking_tokens = int(thinking_tokens or 0)
+        #: retries on 429 / 5xx / network errors with exponential backoff
+        self.max_retries = int(max_retries)
 
     # -- subclasses implement these three ---------------------------------
 
@@ -122,20 +125,46 @@ class Provider(ABC):
         req = urllib.request.Request(url, headers=headers, method="GET")
         return self._send(req, url)
 
+    # transient HTTP statuses worth retrying (rate limit + server errors)
+    RETRY_STATUS = {429, 500, 502, 503, 504}
+
     def _send(self, req: "urllib.request.Request", url: str) -> dict[str, Any]:
+        import time
+
+        attempt = 0
+        while True:
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:  # pragma: no cover - network path
+                detail = exc.read().decode("utf-8", "replace")
+                if exc.code in self.RETRY_STATUS and attempt < self.max_retries:
+                    delay = self._retry_delay(exc, attempt)
+                    attempt += 1
+                    time.sleep(delay)
+                    continue
+                raise ProviderError(
+                    f"{self.name} request failed: HTTP {exc.code}\n{detail}"
+                ) from exc
+            except urllib.error.URLError as exc:  # pragma: no cover - network path
+                if attempt < self.max_retries:
+                    attempt += 1
+                    time.sleep(2 ** (attempt - 1))
+                    continue
+                raise ProviderError(
+                    f"{self.name} request failed: {exc.reason}. "
+                    f"Is the endpoint reachable ({url})?"
+                ) from exc
+
+    def _retry_delay(self, exc, attempt: int) -> float:
+        """Honour a Retry-After header when present, else exponential backoff."""
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:  # pragma: no cover - network path
-            detail = exc.read().decode("utf-8", "replace")
-            raise ProviderError(
-                f"{self.name} request failed: HTTP {exc.code}\n{detail}"
-            ) from exc
-        except urllib.error.URLError as exc:  # pragma: no cover - network path
-            raise ProviderError(
-                f"{self.name} request failed: {exc.reason}. "
-                f"Is the endpoint reachable ({url})?"
-            ) from exc
+            ra = exc.headers.get("Retry-After") if exc.headers else None
+            if ra:
+                return min(float(ra), 30.0)
+        except (TypeError, ValueError):
+            pass
+        return float(2 ** attempt)  # 1, 2, 4, …
 
     # -- model discovery / connection test --------------------------------
 

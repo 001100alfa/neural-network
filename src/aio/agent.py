@@ -233,8 +233,17 @@ class Agent:
             self.ui.tool_result(f"blocked in plan mode: {call.name}", error=True)
             return "Error: plan mode is read-only; this tool is disabled. Present a plan instead."
 
+        # Granular permissions (#7): explicit deny/allow rules override the
+        # default approval flow.
+        rule = self.ctx.permission(call.name)
+        if rule == "deny":
+            self.ui.tool_result(f"denied by permission rule: {call.name}", error=True)
+            return f"Error: tool '{call.name}' is denied by the permission settings."
+        pre_allowed = rule == "allow"
+
         # Approval flow for mutating tools.
-        if tool.needs_approval and not self.ctx.auto_approve and call.name not in self.ctx.approved:
+        if (tool.needs_approval and not pre_allowed and not self.ctx.auto_approve
+                and call.name not in self.ctx.approved):
             decision = self.ui.confirm(call.name, call.arguments)
             if decision == "no":
                 return "Tool call rejected by user."

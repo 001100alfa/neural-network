@@ -71,6 +71,7 @@ def _make_agent(config, ui: UI, no_mcp: bool, plan_mode: bool = False):
         ui=ui,
         auto_approve=config.auto_approve,
         allow_outside_workdir=config.allow_outside_workdir,
+        permissions=dict(config.permissions),
     )
     system_prompt = config.system_prompt
     if config.project_memory:
