@@ -27,6 +27,10 @@ class ToolContext:
     checkpoints: list[dict] = field(default_factory=list)
     # the agent's current task list (#7 TodoWrite)
     todos: list[dict] = field(default_factory=list)
+    # callable(prompt:str) -> str that runs an isolated sub-agent (#5); set by Agent
+    spawn_subagent: Any = None
+    # recursion guard so sub-agents can't spawn sub-agents endlessly
+    depth: int = 0
 
     def snapshot(self, path: "Path", label: str) -> None:
         """Record the pre-edit contents of ``path`` so the change can be undone."""
@@ -126,6 +130,7 @@ def default_registry() -> ToolRegistry:
     from .git import GitCommitTool, GitDiffTool, GitStatusTool
     from .search import GlobTool, GrepTool
     from .shell import RunShellTool
+    from .task import TaskTool
     from .todos import WriteTodosTool
 
     return ToolRegistry(
@@ -141,6 +146,7 @@ def default_registry() -> ToolRegistry:
             GitDiffTool(),
             GitCommitTool(),
             WriteTodosTool(),
+            TaskTool(),
         ]
     )
 

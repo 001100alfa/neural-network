@@ -36,11 +36,13 @@ class Agent:
         auto_compact: bool = True,
         context_limit: int = 120_000,
         plan_mode: bool = False,
+        hooks=None,
     ) -> None:
         self.provider = provider
         self.tools = tools
         self.ctx = ctx
         self.ui = ui
+        self.hooks = hooks  # optional HookRunner (#6)
         self.system_prompt = system_prompt
         self.max_steps = max_steps
         #: when True and the UI supports token(), stream the reply token-by-token
@@ -54,6 +56,39 @@ class Agent:
         self.summary: str = ""
         #: token usage accumulated during the most recent run()
         self.run_usage: dict[str, int] = {"requests": 0, "input_tokens": 0, "output_tokens": 0}
+        # expose sub-agent spawning to the task tool (#5)
+        self.ctx.spawn_subagent = self._spawn_subagent
+
+    def _spawn_subagent(self, prompt: str) -> str:
+        """Run an isolated child agent (own context, same tools/provider)."""
+        if hasattr(self.ui, "info"):
+            self.ui.info(f"↳ sub-agent: {prompt[:80]}")
+        child_ctx = ToolContext(
+            workdir=self.ctx.workdir,
+            ui=self.ui,
+            auto_approve=self.ctx.auto_approve,
+            allow_outside_workdir=self.ctx.allow_outside_workdir,
+            approved=self.ctx.approved,
+            checkpoints=self.ctx.checkpoints,   # share so parent can rewind sub-agent edits
+            depth=self.ctx.depth + 1,
+        )
+        child = Agent(
+            provider=self.provider,
+            tools=self.tools,
+            ctx=child_ctx,
+            ui=self.ui,
+            system_prompt=self.system_prompt,
+            max_steps=self.max_steps,
+            stream=False,            # sub-agents don't stream tokens to the UI
+            auto_compact=self.auto_compact,
+            context_limit=self.context_limit,
+            hooks=self.hooks,
+        )
+        result = child.run(prompt)
+        # roll the sub-agent's token usage into the parent's tally
+        for k in ("requests", "input_tokens", "output_tokens"):
+            self.run_usage[k] += child.run_usage.get(k, 0)
+        return result or "(sub-agent finished with no summary)"
 
     def reset(self) -> None:
         self.messages = []
@@ -208,6 +243,15 @@ class Agent:
         else:
             self.ui.tool_call(call.name, call.arguments)
 
+        # PreToolUse hooks (#6) — may block the call.
+        if self.hooks is not None and self.hooks.has("PreToolUse"):
+            pre = self.hooks.run("PreToolUse", call.name, call.arguments)
+            for line in pre.outputs:
+                self.ui.info(line) if hasattr(self.ui, "info") else None
+            if pre.blocked:
+                self.ui.tool_result(f"blocked by hook: {pre.reason}", error=True)
+                return f"Error: blocked by PreToolUse hook: {pre.reason}"
+
         try:
             result = tool.run(call.arguments, self.ctx)
         except ToolError as exc:
@@ -216,6 +260,12 @@ class Agent:
         except Exception as exc:  # pragma: no cover - defensive
             self.ui.tool_result(f"{type(exc).__name__}: {exc}", error=True)
             return f"Error: {type(exc).__name__}: {exc}"
+
+        # PostToolUse hooks (#6) — observe the result (cannot block).
+        if self.hooks is not None and self.hooks.has("PostToolUse"):
+            post = self.hooks.run("PostToolUse", call.name, call.arguments, result=result)
+            for line in post.outputs:
+                self.ui.info(line) if hasattr(self.ui, "info") else None
 
         self.ui.tool_result(result)
         return result

@@ -69,6 +69,20 @@ Requires Python **3.11+**.
   button in the dashboard, or `providers.<name>.thinking_tokens` in config
   (Anthropic uses a token budget; OpenAI-style models map it to
   `reasoning_effort`).
+- **Sub-agents** — a `task` tool delegates a self-contained job to a fresh agent
+  with its own clean context (same tools/provider), returning only its summary —
+  keeps the main context small for big tasks.
+- **Hooks** — run shell commands around tool calls. Configure in `.aio.toml`:
+
+  ```toml
+  [[hooks]]
+  event = "PreToolUse"            # PreToolUse can block (non-zero exit)
+  matcher = "write_file|edit_file"  # regex over the tool name (optional)
+  command = "ruff check ."
+  ```
+
+  The tool-call JSON is piped to the command on stdin (and in `$AIO_TOOL` /
+  `$AIO_TOOL_ARGS`); a failing `PreToolUse` hook blocks the call.
 
 ## Portable — run on Windows 11 (no install)
 

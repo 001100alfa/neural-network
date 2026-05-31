@@ -48,3 +48,13 @@ base_url = "http://localhost:11434/v1"
 # name = "fetch"
 # command = "uvx"
 # args = ["mcp-server-fetch"]
+
+# ----- Optional: tool hooks (#6) ---------------------------------------------
+# Run shell commands around tool calls. A PreToolUse hook that exits non-zero
+# blocks the call. The tool-call JSON is piped on stdin (also $AIO_TOOL /
+# $AIO_TOOL_ARGS).
+
+# [[hooks]]
+# event = "PostToolUse"
+# matcher = "write_file|edit_file"   # regex over the tool name (optional)
+# command = "ruff check ."

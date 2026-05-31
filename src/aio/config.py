@@ -128,6 +128,8 @@ class Config:
     mcp_servers: list[dict[str, Any]] = field(default_factory=list)
     #: project/instruction memory loaded from CLAUDE.md / AGENTS.md / .aio.md
     project_memory: str = ""
+    #: PreToolUse/PostToolUse hooks (#6)
+    hooks: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def active(self) -> ProviderConfig:
@@ -218,6 +220,7 @@ def load_config(
         system_prompt=file_cfg.get("system_prompt", DEFAULT_SYSTEM_PROMPT),
         mcp_servers=mcp_servers,
         project_memory=load_project_memory(workdir),
+        hooks=file_cfg.get("hooks", []),
     )
 
 
