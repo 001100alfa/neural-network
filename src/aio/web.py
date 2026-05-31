@@ -18,6 +18,8 @@ compatibility (``from aio.web import AgentService, EventUI``).
 from __future__ import annotations
 
 import json
+import os
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -96,6 +98,10 @@ def _make_handler(service: AgentService, guard: "WebGuard | None" = None,
                 return {}
             return json.loads(self.rfile.read(length).decode("utf-8"))
 
+        def _canon_path(self) -> None:
+            """Accept the versioned API alias: /api/v1/... maps to /api/..."""
+            self.path = re.sub(r"^/api/v1(/|$|\?)", r"/api\1", self.path)
+
         def _operational(self) -> bool:
             """Unauthenticated liveness/metrics endpoints (still host+rate gated)."""
             path = self.path.split("?")[0]
@@ -104,6 +110,11 @@ def _make_handler(service: AgentService, guard: "WebGuard | None" = None,
             if not active_guard.host_ok(self.headers.get("Host")):
                 self._json(403, {"error": "forbidden: unexpected Host header"})
                 return True
+            # /metrics may be protected (operational data) via env opt-in.
+            if path == "/metrics" and os.environ.get("AIO_METRICS_PROTECTED") == "1":
+                if not active_guard.authorized(active_guard.extract_token(self.headers, self.path)):
+                    self._json(401, {"error": "unauthorized: metrics are protected"})
+                    return True
             if path == "/metrics":
                 extra = {
                     "conversations": float(len(service.conversations)),
@@ -118,6 +129,7 @@ def _make_handler(service: AgentService, guard: "WebGuard | None" = None,
             return True
 
         def do_GET(self):  # noqa: N802
+            self._canon_path()
             if self._operational():
                 return
             if not self._preflight():
@@ -172,6 +184,7 @@ def _make_handler(service: AgentService, guard: "WebGuard | None" = None,
                 pass
 
         def do_POST(self):  # noqa: N802
+            self._canon_path()
             if not self._preflight():
                 return
             if active_guard.body_too_large(self.headers.get("Content-Length")):
@@ -277,9 +290,18 @@ def _make_handler(service: AgentService, guard: "WebGuard | None" = None,
     return Handler
 
 
+def _wrap_tls(httpd: ThreadingHTTPServer, certfile: str, keyfile: str | None) -> None:
+    import ssl
+
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(certfile=certfile, keyfile=keyfile)
+    httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+
+
 def serve(
     config: Config, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = False,
     token: str | None = None, require_auth: bool = True, auto_approve: bool = False,
+    tls_cert: str | None = None, tls_key: str | None = None,
 ) -> None:
     service = AgentService(config, gated=not auto_approve)
     if not require_auth:
@@ -293,9 +315,13 @@ def serve(
     guard = WebGuard(token, allowed)
     metrics = Metrics()
     httpd = ThreadingHTTPServer((host, port), _make_handler(service, guard, metrics))
+    scheme = "http"
+    if tls_cert:
+        _wrap_tls(httpd, tls_cert, tls_key)
+        scheme = "https"
 
     browse_host = "localhost" if exposed else host
-    url = f"http://{browse_host}:{port}"
+    url = f"{scheme}://{browse_host}:{port}"
     open_url = f"{url}/?token={token}" if token else url
     print(f"AIO web dashboard running at {url}")
     if token:
