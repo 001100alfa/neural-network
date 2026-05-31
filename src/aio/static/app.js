@@ -110,6 +110,7 @@ async function loadInfo(){
   document.getElementById('planBtn').classList.toggle('on', !!d.plan_mode);
   document.getElementById('thinkBtn').classList.toggle('on', (d.thinking_tokens||0)>0);
   if(d.output_style){ const ss=document.getElementById('styleSel'); if(ss) ss.value=d.output_style; }
+  if(d.permission_mode){ const ps=document.getElementById('permSel'); if(ps) ps.value=d.permission_mode; }
 }
 document.getElementById('thinkBtn').onclick=async()=>{
   const on=document.getElementById('thinkBtn').classList.contains('on');
@@ -375,6 +376,13 @@ document.getElementById('themeSel').onchange=(e)=>{ const s=getSettings(); s.the
 document.getElementById('styleSel').onchange=async(e)=>{
   await fetch('/api/style',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({style:e.target.value})});
+};
+const permSel=document.getElementById('permSel');
+if(permSel) permSel.onchange=async(e)=>{
+  const r=await fetch('/api/permission-mode',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({mode:e.target.value})});
+  const d=await r.json(); if(d.describe) sysMsg('permissions → '+d.describe);
+  loadInfo();
 };
 document.getElementById('fzMinus').onclick=()=>{ const s=getSettings(); s.font=Math.max(11,(s.font||14)-1); saveSettings(s); };
 document.getElementById('fzPlus').onclick=()=>{ const s=getSettings(); s.font=Math.min(22,(s.font||14)+1); saveSettings(s); };

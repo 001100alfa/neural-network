@@ -25,10 +25,21 @@ class ToolContext:
     approved: set[str] = field(default_factory=set)
     # granular permission rules: tool name -> "allow" | "deny" | "ask"
     permissions: dict[str, str] = field(default_factory=dict)
+    # unified permission mode: plan | default | accept_edits | admin
+    permission_mode: str = "default"
 
-    def permission(self, tool_name: str) -> str:
-        """Resolve the effective rule for ``tool_name`` (allow/deny/ask)."""
-        return self.permissions.get(tool_name, self.permissions.get("*", "ask"))
+    def permission(self, tool_name: str, needs_approval: bool = True) -> str:
+        """Resolve the effective rule for ``tool_name`` (allow/deny/ask).
+
+        Explicit per-tool ``permissions`` rules win; otherwise the permission
+        mode decides. A wildcard ``permissions['*']`` overrides the mode too.
+        """
+        explicit = self.permissions.get(tool_name) or self.permissions.get("*")
+        if explicit:
+            return explicit
+        from ..permissions import decision
+
+        return decision(self.permission_mode, tool_name, needs_approval)
     # file snapshots taken before mutating edits, for rewind/undo (#4)
     checkpoints: list[dict] = field(default_factory=list)
     # the agent's current task list (#7 TodoWrite)

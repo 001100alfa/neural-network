@@ -388,12 +388,13 @@ class Agent:
                 self._audit(call.name, call.arguments, "blocked", reason)
                 return f"Error: refused — {reason}. This command is blocked by the safety guardrail."
 
-        # Granular permissions (#7): explicit deny/allow rules override the
-        # default approval flow.
-        rule = self.ctx.permission(call.name)
+        # Permission mode + granular rules (#7): resolve allow/ask/deny. An
+        # explicit per-tool rule wins; otherwise the permission mode (plan /
+        # default / accept_edits / admin) decides.
+        rule = self.ctx.permission(call.name, getattr(tool, "needs_approval", False))
         if rule == "deny":
-            self.ui.tool_result(f"denied by permission rule: {call.name}", error=True)
-            return f"Error: tool '{call.name}' is denied by the permission settings."
+            self.ui.tool_result(f"denied by permission settings: {call.name}", error=True)
+            return f"Error: tool '{call.name}' is denied by the current permission mode/rules."
         pre_allowed = rule == "allow"
 
         # Approval flow for mutating tools.

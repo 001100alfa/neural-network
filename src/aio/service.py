@@ -224,6 +224,9 @@ class AgentService(SessionsMixin, ProvidersMixin, PanelsMixin):
             checkpoints=self._checkpoints,
             todos=self._todos,
             permissions=dict(self.config.permissions),
+            # Web mode: gated -> "default" so EventUI.confirm asks the browser
+            # via the approval broker; ungated -> "admin" (elevated, auto-approve).
+            permission_mode="default" if self.gated else "admin",
             audit=self._audit_log.record,
         )
         registry = default_registry()
@@ -335,6 +338,7 @@ class AgentService(SessionsMixin, ProvidersMixin, PanelsMixin):
             "token_backend": _token_backend(),
             "tool_approval": "gated" if self.gated else "auto",
             "context_window": self.config.effective_context_window,
+            "permission_mode": self.config.permission_mode,
         }
 
     def set_plan_mode(self, on: bool) -> dict[str, Any]:
@@ -342,6 +346,19 @@ class AgentService(SessionsMixin, ProvidersMixin, PanelsMixin):
             self.plan_mode = bool(on)
             self._build_agent()
             return {"plan_mode": self.plan_mode}
+
+    def set_permission_mode(self, mode: str) -> dict[str, Any]:
+        """Switch the unified permission mode (plan|default|accept_edits|admin)."""
+        from .permissions import describe, normalize
+
+        with self._lock:
+            self.config.permission_mode = normalize(mode)
+            # admin -> ungate (auto-approve everything); anything else -> gated
+            self.gated = self.config.permission_mode != "admin"
+            self.plan_mode = self.config.permission_mode == "plan"
+            self._build_agent()
+            return {"permission_mode": self.config.permission_mode,
+                    "describe": describe(self.config.permission_mode)}
 
     def set_thinking(self, tokens: int) -> dict[str, Any]:
         """Set the extended-thinking budget for the active provider (#9)."""
