@@ -255,6 +255,8 @@ class AgentService:
             stream=True,
             plan_mode=self.plan_mode,
             hooks=hooks,
+            auto_context=self.config.auto_context,
+            auto_context_k=self.config.auto_context_results,
         )
         agent.summary = summary
         agent.messages = messages

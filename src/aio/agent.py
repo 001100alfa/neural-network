@@ -38,6 +38,8 @@ class Agent:
         context_limit: int = 120_000,
         plan_mode: bool = False,
         hooks=None,
+        auto_context: bool = False,
+        auto_context_k: int = 5,
     ) -> None:
         self.provider = provider
         self.tools = tools
@@ -56,6 +58,10 @@ class Agent:
         import threading
         self._usage_lock = threading.Lock()  # guards run_usage under parallel sub-agents
         self.plan_mode = plan_mode
+        #: auto-retrieve relevant code into context each turn (RAG-lite, BM25)
+        self.auto_context = auto_context
+        self.auto_context_k = auto_context_k
+        self._auto_context = ""        # transient retrieved block for the current turn
         self.messages: list[Message] = []
         #: running summary of compacted (older) messages, fed via the system prompt
         self.summary: str = ""
@@ -117,7 +123,40 @@ class Agent:
             parts.append(f"\n\n# Summary of earlier conversation\n{self.summary}")
         if self.plan_mode:
             parts.append(PLAN_MODE_NOTE)
+        if self._auto_context:
+            parts.append(
+                "\n\n# Retrieved code context (auto, keyword search)\n"
+                "These snippets were retrieved by relevance to the latest request and "
+                "may be incomplete or irrelevant — verify by reading the files before "
+                "relying on them.\n\n" + self._auto_context
+            )
         return "".join(parts)
+
+    # -- retrieval-augmented context (RAG-lite) --------------------------
+    def _retrieve_context(self, query: str) -> None:
+        """Populate self._auto_context with BM25-ranked snippets for ``query``."""
+        self._auto_context = ""
+        if not self.auto_context or not (query or "").strip():
+            return
+        try:
+            if getattr(self.ctx, "code_searcher", None) is None:
+                from .search import CodeSearcher
+
+                self.ctx.code_searcher = CodeSearcher(self.ctx.workdir).build()
+            hits = self.ctx.code_searcher.search(query, k=self.auto_context_k)
+        except Exception:  # pragma: no cover - retrieval must never break a turn
+            return
+        if not hits:
+            return
+        blocks, budget = [], 6000
+        for h in hits:
+            snippet = "\n".join(h["snippet"].splitlines()[:18])
+            block = f"## {h['path']}:{h['start_line']}-{h['end_line']}\n{snippet}"
+            if budget - len(block) < 0:
+                break
+            budget -= len(block)
+            blocks.append(block)
+        self._auto_context = "\n\n".join(blocks)
 
     def _effective_specs(self) -> list[dict]:
         specs = self.tools.specs()
@@ -209,6 +248,7 @@ class Agent:
         self.messages.append(Message(role="user", content=user_input, images=images or []))
         self.run_usage = {"requests": 0, "input_tokens": 0, "output_tokens": 0,
                           "cache_read": 0, "cache_write": 0}
+        self._retrieve_context(user_input)
         self._maybe_compact()
         final_text = ""
 

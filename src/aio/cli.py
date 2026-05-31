@@ -102,6 +102,8 @@ def _make_agent(config, ui: UI, no_mcp: bool, plan_mode: bool = False, per_hunk:
         max_steps=config.max_steps,
         plan_mode=plan_mode,
         hooks=HookRunner(config.hooks, config.workdir),
+        auto_context=config.auto_context,
+        auto_context_k=config.auto_context_results,
     )
     return agent, mcp_servers
 
