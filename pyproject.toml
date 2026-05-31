@@ -34,7 +34,7 @@ aio = "aio.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-aio = ["static/*.html", "static/*.css", "static/*.js"]
+aio = ["static/*.html", "static/*.css", "static/*.js", "static/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

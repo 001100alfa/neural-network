@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "module",
+  "comment": "Marks the dashboard's .js files as ES modules for node tooling (node --check / --test). The browser loads them via <script type=module> and ignores this file."
+}

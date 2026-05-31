@@ -47,12 +47,24 @@ def _web_source() -> str:
 def test_js_parses_with_node():
     node = shutil.which("node")
     if not node:  # pragma: no cover - depends on environment
-        pytest.skip("node not available to syntax-check app.js")
+        pytest.skip("node not available to syntax-check the dashboard JS")
+    for name in ("app.js", "util.js"):
+        result = subprocess.run(
+            [node, "--check", _asset_path(name)], capture_output=True, text=True,
+        )
+        assert result.returncode == 0, f"{name} has a syntax error:\n{result.stderr}"
+
+
+def test_js_unit_tests_pass():
+    """Run the node:test behavioural unit tests for the pure JS logic (util.js)."""
+    node = shutil.which("node")
+    if not node:  # pragma: no cover - depends on environment
+        pytest.skip("node not available to run the JS unit tests")
+    test_file = Path(__file__).parent / "frontend" / "util.test.mjs"
     result = subprocess.run(
-        [node, "--check", _asset_path("app.js")],
-        capture_output=True, text=True,
+        [node, "--test", str(test_file)], capture_output=True, text=True,
     )
-    assert result.returncode == 0, f"app.js has a syntax error:\n{result.stderr}"
+    assert result.returncode == 0, f"JS unit tests failed:\n{result.stdout}\n{result.stderr}"
 
 
 def test_css_braces_balanced():

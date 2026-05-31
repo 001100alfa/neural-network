@@ -17,11 +17,12 @@ from importlib.resources import files
 
 _STATIC = files(__package__) / "static"
 
-# (filename -> content-type) for the assets the dashboard serves.
+# Content types for the extensions the dashboard serves (any file with one of
+# these suffixes that lives directly in aio/static/ may be served).
 _CONTENT_TYPES = {
-    "index.html": "text/html; charset=utf-8",
-    "app.css": "text/css; charset=utf-8",
-    "app.js": "application/javascript; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
 }
 
 
@@ -32,15 +33,23 @@ def _read(name: str) -> str:
 def static_asset(path: str) -> tuple[bytes, str] | None:
     """Return ``(body, content_type)`` for a dashboard asset, or ``None``.
 
-    ``path`` is the request path (e.g. ``"/app.js"`` or ``"/"``).
+    ``path`` is the request path (e.g. ``"/app.js"`` or ``"/"``). Only plain
+    filenames with a known extension are served — never a nested path, ``..``
+    traversal, or anything but the whitelisted asset extensions.
     """
     name = path.lstrip("/") or "index.html"
-    if name in _CONTENT_TYPES:
-        try:
-            return _read(name).encode("utf-8"), _CONTENT_TYPES[name]
-        except FileNotFoundError:
-            return None
-    return None
+    if "/" in name or "\\" in name or name.startswith("."):
+        return None
+    import os.path
+
+    ext = os.path.splitext(name)[1]
+    content_type = _CONTENT_TYPES.get(ext)
+    if content_type is None:
+        return None
+    try:
+        return _read(name).encode("utf-8"), content_type
+    except FileNotFoundError:
+        return None
 
 
 # Backwards-compatible export: the served HTML document.
