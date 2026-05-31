@@ -104,6 +104,17 @@ shell commands; and use git. Guidelines:
 - When the task is complete, give a short summary of what changed.
 """
 
+# Named output styles (#7): appended to the system prompt to shape responses.
+OUTPUT_STYLES: dict[str, str] = {
+    "default": "",
+    "concise": "\n\n# Output style: concise\nBe terse. Prefer the shortest correct "
+               "answer; minimal prose, no preamble or recap.",
+    "explanatory": "\n\n# Output style: explanatory\nExplain your reasoning and the "
+                   "trade-offs as you work, so the user learns from the change.",
+    "teacher": "\n\n# Output style: teacher\nTeach as you go: define key concepts, note "
+               "why each step matters, and suggest what to learn next.",
+}
+
 
 @dataclass
 class ProviderConfig:
@@ -131,8 +142,10 @@ class Config:
     project_memory: str = ""
     #: PreToolUse/PostToolUse hooks (#6)
     hooks: list[dict[str, Any]] = field(default_factory=list)
-    #: granular tool permissions: tool name -> allow|deny|ask (#7)
+    #: granular tool permissions: tool name -> allow|deny|ask
     permissions: dict[str, str] = field(default_factory=dict)
+    #: named output style (#7): default|concise|explanatory|teacher
+    output_style: str = "default"
 
     @property
     def active(self) -> ProviderConfig:
@@ -226,6 +239,7 @@ def load_config(
         project_memory=load_project_memory(workdir),
         hooks=file_cfg.get("hooks", []),
         permissions=file_cfg.get("permissions", {}) or {},
+        output_style=file_cfg.get("output_style", "default"),
     )
 
 

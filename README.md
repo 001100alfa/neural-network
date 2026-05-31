@@ -91,6 +91,10 @@ Requires Python **3.11+**.
   individually; only accepted hunks are written.
 - **Cache metrics** — the usage bar reports prompt-cache **read / written**
   tokens (Anthropic `cache_read` / `cache_creation`) alongside cost.
+- **Output styles** — pick a response style (default / concise / explanatory /
+  teacher) in settings or via `output_style` in config.
+- **Document attachments** — attach text/code/PDF files (📎 or drag-drop); their
+  text is inlined into your message (images still go as vision content).
 - **Prompt caching** — on Anthropic, the (stable) system prompt and tool
   definitions are sent with `cache_control`, cutting cost/latency on repeated
   turns. On by default (`providers.<name>.cache = false` to disable).
