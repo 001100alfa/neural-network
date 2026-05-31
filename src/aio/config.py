@@ -144,8 +144,10 @@ class Config:
     hooks: list[dict[str, Any]] = field(default_factory=list)
     #: granular tool permissions: tool name -> allow|deny|ask
     permissions: dict[str, str] = field(default_factory=dict)
-    #: named output style (#7): default|concise|explanatory|teacher
+    #: named output style: default|concise|explanatory|teacher
     output_style: str = "default"
+    #: OpenTelemetry-style telemetry settings (#8)
+    telemetry: dict[str, Any] = field(default_factory=dict)
 
     @property
     def active(self) -> ProviderConfig:
@@ -240,6 +242,7 @@ def load_config(
         hooks=file_cfg.get("hooks", []),
         permissions=file_cfg.get("permissions", {}) or {},
         output_style=file_cfg.get("output_style", "default"),
+        telemetry=file_cfg.get("telemetry", {}) or {},
     )
 
 

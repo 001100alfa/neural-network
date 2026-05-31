@@ -73,3 +73,12 @@ base_url = "http://localhost:11434/v1"
 # name = "remote-fs"
 # url = "https://my-mcp-host.example/mcp"
 # # headers = { Authorization = "Bearer ..." }
+
+# ----- Optional: OpenTelemetry-style telemetry (#8) --------------------------
+# Each agent turn -> a span (gen_ai.* attributes), written as JSONL and/or
+# POSTed to an OTLP/HTTP endpoint. Dependency-free.
+
+# [telemetry]
+# enabled = true
+# file = "aio-otel.jsonl"
+# otlp_endpoint = "http://localhost:4318/v1/traces"

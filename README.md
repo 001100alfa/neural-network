@@ -96,6 +96,10 @@ Requires Python **3.11+**.
   individually; only accepted hunks are written.
 - **Cache metrics** — the usage bar reports prompt-cache **read / written**
   tokens (Anthropic `cache_read` / `cache_creation`) alongside cost.
+- **Telemetry (OpenTelemetry-style)** — optional, dependency-free: each agent
+  turn becomes a span with GenAI semantic attributes (`gen_ai.*`, token counts,
+  duration), written as JSONL and/or POSTed to an OTLP/HTTP endpoint. Enable in
+  `[telemetry]` (`enabled`, `file`, `otlp_endpoint`).
 - **Output styles** — pick a response style (default / concise / explanatory /
   teacher) in settings or via `output_style` in config.
 - **Document attachments** — attach text/code/PDF files (📎 or drag-drop); their

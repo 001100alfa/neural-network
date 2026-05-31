@@ -242,6 +242,8 @@ class AgentService:
         # top of env/config so they survive restarts.
         self.keys = KeyStore.load()
         self.keys.apply_to(self.config)
+        from .telemetry import Telemetry
+        self.telemetry = Telemetry.from_config(self.config.telemetry)
         # cumulative token usage / cost estimate for this session
         self.usage: dict[str, Any] = {
             "requests": 0, "input_tokens": 0, "output_tokens": 0,
@@ -508,15 +510,27 @@ class AgentService:
             agent, ui, conv_lock = self._agent_for_conv(conv_id)
         with conv_lock:
             ui.drain()
+            import time as _t
+            t0 = _t.time(); ok = True
             try:
                 final = agent.run(message, images=images)
             except ProviderError as exc:
                 ui.error(str(exc))
-                final = ""
+                final = ""; ok = False
             self._summaries[conv_id or "default"] = agent.summary
             self._todos = agent.ctx.todos
             self._accumulate_usage(agent)
+            self._record_telemetry(agent, ok, _t.time() - t0)
             return {"events": ui.drain(), "final": final, "usage": self.usage_info()}
+
+    def _record_telemetry(self, agent, ok: bool, duration_s: float) -> None:
+        try:
+            self.telemetry.record_turn(
+                provider=self.config.provider, model=self.config.active.model,
+                usage=getattr(agent, "run_usage", {}) or {}, duration_s=duration_s, ok=ok,
+            )
+        except Exception:  # pragma: no cover - telemetry must never break a turn
+            pass
 
     def chat_stream(self, message: str, emit, images=None, conv_id: str = "default", files=None) -> None:
         """Run a turn, delivering each event to ``emit`` as it happens.
@@ -531,13 +545,16 @@ class AgentService:
         with conv_lock:
             ui.drain()
             ui.sink = emit
+            import time as _t
+            t0 = _t.time(); ok = True
             try:
                 final = agent.run(message, images=images)
             except ProviderError as exc:
                 emit({"type": "error", "text": str(exc)})
-                final = ""
+                final = ""; ok = False
             finally:
                 ui.sink = None
+            self._record_telemetry(agent, ok, _t.time() - t0)
             self._summaries[conv_id or "default"] = agent.summary
             self._todos = agent.ctx.todos
             self._accumulate_usage(agent)
