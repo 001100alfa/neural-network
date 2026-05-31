@@ -6,8 +6,9 @@ semantic versioning.
 
 ## [0.1.5] - 2026-05-31
 
-Deep investments on top of the two hardening waves. Test count 261 -> 312
-(+1 skipped); coverage 90%; mypy + a coverage gate in CI.
+Deep investments on top of the two hardening waves, plus Windows/Docker
+deployment. Test count 261 -> 319 (+1 skipped); coverage 90%; mypy + a coverage
+gate in CI.
 
 ### Added
 - **Reflection loop**: the agent self-verifies after answering and continues if
@@ -22,6 +23,12 @@ Deep investments on top of the two hardening waves. Test count 261 -> 312
 - Git panel deepened (branches/switch/stash/show/pull/push); dashboard split
   into ES modules (`util.js`/`editor.js`/`panels.js`) with a node:test + a
   Playwright e2e; a header version/uptime readout.
+- **Portable Linux container** (`run-docker.sh`/`run-docker.bat`): runs AIO in a
+  container with a full Linux toolchain (git/ripgrep) and the POSIX sandbox,
+  mounting your project at `/workspace`; `--web-token` honors `AIO_WEB_TOKEN`.
+- **Portable Unix toolchain on Windows** (`setup-tools.bat`): downloads
+  PortableGit (git/bash/grep) into `tools\`, no Docker and no install; `run.bat`
+  puts it first on PATH.
 
 ### Changed
 - CLI/TUI brought under test (cli.py 24->65%, ui.py 30->98%).

@@ -93,3 +93,38 @@ def test_default_registry_has_expected_tools():
     # specs are well-formed
     for spec in reg.specs():
         assert "name" in spec and "parameters" in spec
+
+
+# -- Claude-Code-level edit error hints -------------------------------------
+
+def test_edit_hint_whitespace_difference(tmp_path):
+    from aio.tools.files import _edit_not_found_hint
+    text = "def f():\n        return 1\n"          # 8-space indent
+    msg = _edit_not_found_hint(text, "def f():\n    return 1")   # 4-space
+    assert "whitespace" in msg.lower() or "indentation" in msg.lower()
+
+
+def test_edit_hint_closest_line_for_typo(tmp_path):
+    from aio.tools.files import _edit_not_found_hint
+    text = "result = compute_total(items)\n"
+    msg = _edit_not_found_hint(text, "result = compute_totl(items)")   # typo
+    assert "closest line" in msg.lower() and "compute_total" in msg
+
+
+def test_edit_hint_generic_when_unrelated(tmp_path):
+    from aio.tools.files import _edit_not_found_hint
+    msg = _edit_not_found_hint("hello world\n", "xyzzy nonexistent")
+    assert "not found" in msg.lower() and "read_file" in msg
+
+
+def test_edit_error_surfaces_hint_through_tool(tmp_path):
+    from aio.tools import ToolContext, ToolError
+    from aio.tools.files import EditFileTool
+    (tmp_path / "f.py").write_text("def f():\n        return 1\n")
+    ctx = ToolContext(workdir=tmp_path)
+    try:
+        EditFileTool().run({"path": "f.py", "old_string": "def f():\n    return 1",
+                            "new_string": "x"}, ctx)
+        assert False, "expected ToolError"
+    except ToolError as e:
+        assert "whitespace" in str(e).lower() or "indentation" in str(e).lower()

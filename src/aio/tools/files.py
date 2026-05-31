@@ -7,6 +7,32 @@ from typing import Any
 
 from .base import Tool, ToolContext, ToolError, _relpath
 
+
+def _edit_not_found_hint(text: str, old_string: str) -> str:
+    """Explain WHY old_string didn't match, so the model can self-correct.
+
+    Distinguishes the common failure modes Claude-Code-style edits hit:
+    whitespace/indentation differences, CRLF vs LF, and "almost there" matches —
+    rather than a bare "not found".
+    """
+    base = "old_string not found in file."
+    # whitespace-only difference: same text once leading/trailing spaces are normalised
+    norm_old = "\n".join(line.strip() for line in old_string.splitlines())
+    norm_text = "\n".join(line.strip() for line in text.splitlines())
+    if norm_old and norm_old in norm_text:
+        return (base + " A whitespace/indentation difference is preventing the match — "
+                "the same text exists but with different leading spaces or tabs. "
+                "Read the file and copy the exact indentation.")
+    # closest line, to point the model at the right place
+    first = old_string.splitlines()[0].strip() if old_string.splitlines() else old_string.strip()
+    if first:
+        candidates = [ln for ln in text.splitlines() if ln.strip()]
+        match = difflib.get_close_matches(first, candidates, n=1, cutoff=0.6)
+        if match:
+            return (base + f" The closest line in the file is:\n    {match[0]!r}\n"
+                    "Read the file and copy the exact text (including whitespace).")
+    return base + " Read the file with read_file and copy the exact text to match."
+
 MAX_READ_BYTES = 400_000
 
 
@@ -221,7 +247,7 @@ class EditFileTool(Tool):
         text = p.read_text("utf-8", "replace")
         count = text.count(old_string)
         if count == 0:
-            raise ToolError("old_string not found in file. Read the file and try again.")
+            raise ToolError(_edit_not_found_hint(text, old_string))
         if count > 1 and not replace_all:
             raise ToolError(
                 f"old_string is not unique ({count} matches). "
