@@ -407,7 +407,11 @@ pytest
 ```
 
 The test suite (no network required) covers tool behaviour, config precedence,
-and provider request-building / response-parsing.
+and provider request-building / response-parsing. It also includes an
+**end-to-end autonomy test** (`tests/test_autonomous.py`): with a scripted
+provider but all-real tools, the agent navigates (`find_symbol`), reads a
+symbol, edits a file, and runs the project's tests to fix a deliberately broken
+suite — asserting the file changed and the tests pass.
 
 CI runs the linter + tests on every push/PR. Pushing a `vX.Y.Z` tag triggers
 the **release** workflow, which builds the wheel + sdist and a portable zip and
