@@ -14,9 +14,10 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version tag to release (e.g. v0.1.0)"
+        # No default on purpose: a stale default (v0.1.0) was once accepted
+        # unchanged and tagged a release wrongly. You must type the version.
+        description: "Version tag to release, e.g. v0.1.6 (must match pyproject)"
         required: true
-        default: "v0.1.0"
 
 permissions:
   contents: write
@@ -39,6 +40,19 @@ jobs:
           git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
           git -c protocol.version=2 fetch -q --depth 1 origin "$GITHUB_REF"
           git checkout -q FETCH_HEAD
+
+      - name: Verify the tag matches the package version
+        run: |
+          # Guard against the version-input/package mismatch that once tagged a
+          # 0.1.6 build as v0.1.0: the tag (minus a leading 'v') must equal the
+          # version in pyproject.toml.
+          PKG=$(grep -m1 '^version' pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          TAG=${VERSION#v}
+          if [ "$PKG" != "$TAG" ]; then
+            echo "::error::Release tag v$TAG does not match pyproject version $PKG. Bump the version or fix the tag."
+            exit 1
+          fi
+          echo "tag and package version agree: $PKG"
 
       - name: Build wheel + sdist
         run: |
