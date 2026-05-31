@@ -53,6 +53,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="One-shot output format (json = headless, structured result).")
     p.add_argument("--diff-approve", action="store_true",
                    help="Approve file edits hunk-by-hunk (interactive).")
+    p.add_argument("--tui", action="store_true",
+                   help="Full-screen curses TUI for the interactive session.")
+    p.add_argument("--vim", action="store_true",
+                   help="With --tui, start in vim NORMAL mode (modal editing).")
     p.add_argument("--list-tools", action="store_true", help="List tools and exit.")
     p.add_argument("--version", action="version", version=f"aio {__version__}")
     return p
@@ -236,7 +240,11 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             _save_cli_session(agent)
             return 0
-        rc = repl(agent, config, ui)
+        if args.tui:
+            from .tui import run_tui
+            rc = run_tui(agent, config, vim=args.vim)
+        else:
+            rc = repl(agent, config, ui)
         _save_cli_session(agent)
         return rc
     finally:
