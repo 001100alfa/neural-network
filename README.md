@@ -73,6 +73,17 @@ Requires Python **3.11+**.
 - **Background commands** — `run_background` starts a long-running command (dev
   server, watcher, long build) without blocking; `check_background` reads its
   output or stops it.
+- **Request retries** — provider calls retry on `429`/`5xx`/network errors with
+  exponential backoff (honouring `Retry-After`); `providers.<name>.max_retries`.
+- **Granular permissions** — per-tool rules in config decide whether a tool is
+  allowed without a prompt, always denied, or asks:
+
+  ```toml
+  [permissions]
+  run_shell = "allow"     # never prompt
+  git_commit = "deny"     # always blocked
+  "*" = "ask"             # default
+  ```
 - **Prompt caching** — on Anthropic, the (stable) system prompt and tool
   definitions are sent with `cache_control`, cutting cost/latency on repeated
   turns. On by default (`providers.<name>.cache = false` to disable).

@@ -58,3 +58,12 @@ base_url = "http://localhost:11434/v1"
 # event = "PostToolUse"
 # matcher = "write_file|edit_file"   # regex over the tool name (optional)
 # command = "ruff check ."
+
+# ----- Optional: granular tool permissions (#7) ------------------------------
+# Per-tool rules: "allow" (run without prompting), "deny" (always block), or
+# "ask" (default). "*" sets the fallback.
+
+# [permissions]
+# run_shell = "allow"
+# git_commit = "deny"
+# "*" = "ask"

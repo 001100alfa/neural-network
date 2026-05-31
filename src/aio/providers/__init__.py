@@ -58,4 +58,5 @@ def build_provider(config: "Config") -> Provider:
         extra=pc.extra,
         cache=pc.cache,
         thinking_tokens=pc.thinking_tokens,
+        max_retries=pc.max_retries,
     )

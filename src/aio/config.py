@@ -112,8 +112,9 @@ class ProviderConfig:
     base_url: str | None = None
     max_tokens: int = 4096
     extra: dict[str, Any] = field(default_factory=dict)
-    cache: bool = True            # provider prompt caching (#8)
-    thinking_tokens: int = 0      # extended-thinking budget, 0 = off (#9)
+    cache: bool = True            # provider prompt caching
+    thinking_tokens: int = 0      # extended-thinking budget, 0 = off
+    max_retries: int = 3          # transient-error retries with backoff
 
 
 @dataclass
@@ -130,6 +131,8 @@ class Config:
     project_memory: str = ""
     #: PreToolUse/PostToolUse hooks (#6)
     hooks: list[dict[str, Any]] = field(default_factory=list)
+    #: granular tool permissions: tool name -> allow|deny|ask (#7)
+    permissions: dict[str, str] = field(default_factory=dict)
 
     @property
     def active(self) -> ProviderConfig:
@@ -204,6 +207,7 @@ def load_config(
             extra=fp.get("extra", {}),
             cache=bool(fp.get("cache", True)),
             thinking_tokens=int(fp.get("thinking_tokens", 0)),
+            max_retries=int(fp.get("max_retries", 3)),
         )
 
     mcp_servers = file_cfg.get("mcp", {}).get("servers", [])
@@ -221,6 +225,7 @@ def load_config(
         mcp_servers=mcp_servers,
         project_memory=load_project_memory(workdir),
         hooks=file_cfg.get("hooks", []),
+        permissions=file_cfg.get("permissions", {}) or {},
     )
 
 

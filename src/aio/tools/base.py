@@ -23,6 +23,12 @@ class ToolContext:
     allow_outside_workdir: bool = False
     # tool names that have been granted "always allow" for this session
     approved: set[str] = field(default_factory=set)
+    # granular permission rules: tool name -> "allow" | "deny" | "ask"
+    permissions: dict[str, str] = field(default_factory=dict)
+
+    def permission(self, tool_name: str) -> str:
+        """Resolve the effective rule for ``tool_name`` (allow/deny/ask)."""
+        return self.permissions.get(tool_name, self.permissions.get("*", "ask"))
     # file snapshots taken before mutating edits, for rewind/undo (#4)
     checkpoints: list[dict] = field(default_factory=list)
     # the agent's current task list (#7 TodoWrite)

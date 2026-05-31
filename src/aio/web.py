@@ -243,6 +243,7 @@ class AgentService:
             allow_outside_workdir=self.config.allow_outside_workdir,
             checkpoints=self._checkpoints,  # shared across rebuilds for rewind
             todos=self._todos,
+            permissions=dict(self.config.permissions),  # deny still applies in web mode
         )
         registry = default_registry()
         for tool in self._mcp_tools:
