@@ -31,6 +31,8 @@ class ToolContext:
     spawn_subagent: Any = None
     # recursion guard so sub-agents can't spawn sub-agents endlessly
     depth: int = 0
+    # background processes started by run_background (#4): id -> dict
+    background: dict = field(default_factory=dict)
 
     def snapshot(self, path: "Path", label: str) -> None:
         """Record the pre-edit contents of ``path`` so the change can be undone."""
@@ -129,9 +131,11 @@ def default_registry() -> ToolRegistry:
     from .files import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
     from .git import GitCommitTool, GitDiffTool, GitStatusTool
     from .search import GlobTool, GrepTool
+    from .background import CheckBackgroundTool, RunBackgroundTool
     from .shell import RunShellTool
     from .task import TaskTool
     from .todos import WriteTodosTool
+    from .web import WebFetchTool
 
     return ToolRegistry(
         [
@@ -147,6 +151,9 @@ def default_registry() -> ToolRegistry:
             GitCommitTool(),
             WriteTodosTool(),
             TaskTool(),
+            WebFetchTool(),
+            RunBackgroundTool(),
+            CheckBackgroundTool(),
         ]
     )
 
