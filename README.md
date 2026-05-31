@@ -191,6 +191,27 @@ run.bat                            :: uses the bundled python\
 launcher → `python` on `PATH`. The `python\` folder is git-ignored (it's a
 generated runtime, not source).
 
+## Portable Unix toolchain on Windows — no Docker, no install
+
+Don't have Docker (and don't want to install it)? You don't need it. AIO only
+shells out to `git`, `bash` and `grep`, which all ship inside **PortableGit** —
+a self-contained Git-for-Windows distribution that needs no installation and no
+admin rights. One command downloads it next to AIO:
+
+```bat
+setup-tools.bat        :: one-time, downloads a portable git/bash/grep into tools\
+run.bat                :: automatically puts tools\ first on PATH
+```
+
+After `setup-tools.bat`, `run.bat` detects `tools\` and prepends it to `PATH`, so
+the agent's `git` / `bash` / `grep` calls resolve to the bundled Unix tools. Copy
+the whole folder (with `python\` from `setup-embedded.bat` and `tools\`) to a USB
+stick and it runs on any Windows 11 machine, fully offline, no Docker.
+
+> This gives you the Docker toolchain benefit without Docker. The one thing it
+> can't provide is the POSIX **resource sandbox** (CPU/file-size caps), which
+> needs a Linux kernel — for that, use the container below or WSL2.
+
 ## Portable Linux container (full toolchain + sandbox)
 
 Running natively on Windows works, but the agent then uses Windows tools and the

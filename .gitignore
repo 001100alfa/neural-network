@@ -21,6 +21,10 @@ env/
 /python/
 python-*-embed-*.zip
 
+# Portable Git/Unix toolchain created by setup-tools.ps1
+/tools/
+PortableGit-*.7z.exe
+
 # Local config / secrets
 .aio.toml
 *.local.toml
