@@ -55,6 +55,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--web-tls-cert", default=None, help="Serve the dashboard over HTTPS with this cert (PEM).")
     p.add_argument("--web-tls-key", default=None, help="Private key (PEM) for --web-tls-cert.")
     p.add_argument("--plan", action="store_true", help="Plan mode: read-only; produce a plan, change nothing.")
+    p.add_argument("--reflect", type=int, default=0, metavar="N",
+                   help="After answering, self-verify and continue up to N times if work remains.")
     p.add_argument("-c", "--continue", dest="cont", action="store_true",
                    help="Resume the most recent CLI conversation.")
     p.add_argument("--output-format", choices=["text", "json"], default="text",
@@ -106,6 +108,7 @@ def _make_agent(config, ui: UI, no_mcp: bool, plan_mode: bool = False, per_hunk:
         hooks=HookRunner(config.hooks, config.workdir),
         auto_context=config.auto_context,
         auto_context_k=config.auto_context_results,
+        max_reflections=config.max_reflections,
     )
     return agent, mcp_servers
 
@@ -207,6 +210,8 @@ def main(argv: list[str] | None = None) -> int:
         overrides["allow_outside_workdir"] = True
     if args.max_steps is not None:
         overrides["max_steps"] = args.max_steps
+    if args.reflect:
+        overrides["max_reflections"] = args.reflect
 
     try:
         config = load_config(

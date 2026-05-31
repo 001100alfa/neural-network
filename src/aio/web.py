@@ -265,7 +265,8 @@ def _make_handler(service: AgentService, guard: "WebGuard | None" = None,
                     self._json(200, service.git_action(
                         payload.get("action", "status"),
                         payload.get("message", ""),
-                        payload.get("pathspec", "-A")))
+                        payload.get("pathspec", "-A"),
+                        name=payload.get("name", "")))
                 elif self.path == "/api/server":
                     action = payload.get("action", "status")
                     if action == "start":

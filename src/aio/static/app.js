@@ -1,5 +1,6 @@
 import { short, esc, parseEnv } from './util.js';
 import './editor.js';   // self-initialising in-browser editor (side-effect import)
+import './panels.js';   // terminal / git / web-server panels (side-effect import)
 
 // Security hygiene: the startup URL carries a one-time ?token=. The server has
 // already pinned it as a SameSite cookie by the time this runs, so strip it
@@ -87,6 +88,13 @@ function renderApproval(ev){
   act.appendChild(mk('Always','always'));
   act.appendChild(mk('Deny','no'));
   wrap.appendChild(act); log.appendChild(wrap); scroll();
+}
+async function loadHealth(){
+  try{
+    const h=await (await fetch('/health')).json();
+    const el=document.getElementById('ver');
+    if(el) el.textContent='v'+h.version+' · up '+Math.round(h.uptime_s)+'s';
+  }catch(_){}
 }
 async function loadInfo(){
   const r=await fetch('/api/info'); const d=await r.json();
@@ -492,64 +500,6 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
   document.getElementById('tab-'+b.dataset.tab).classList.add('active');
 });
 
-// ---- Terminal (cmd / bash) ----
-const termOut=document.getElementById('termOut'), termCmd=document.getElementById('termCmd');
-async function runTerm(){
-  const command=termCmd.value.trim(); if(!command) return;
-  const shell=document.getElementById('termShell').value;
-  termOut.textContent += '\n$ '+command+'\n'; termCmd.value='';
-  termOut.scrollTop=termOut.scrollHeight;
-  try{
-    const r=await fetch('/api/exec',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({command,shell})});
-    const d=await r.json();
-    termOut.textContent += (d.output||'');
-    const tag=document.createElement('div'); tag.className=d.exit_code===0?'ec0':'ecN';
-    tag.textContent='[exit '+d.exit_code+']'; termOut.appendChild(tag);
-  }catch(e){ termOut.textContent += 'error: '+e+'\n'; }
-  termOut.scrollTop=termOut.scrollHeight;
-}
-document.getElementById('termRun').onclick=runTerm;
-termCmd.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();runTerm();}});
-
-// ---- Git ----
-const gitOut=document.getElementById('gitOut');
-function renderGit(text){
-  gitOut.innerHTML='';
-  (text||'').split('\n').forEach(line=>{
-    let c=''; if(line.startsWith('+')&&!line.startsWith('+++'))c='add';
-    else if(line.startsWith('-')&&!line.startsWith('---'))c='del';
-    else if(line.startsWith('@@'))c='hunk';
-    const ln=document.createElement('div'); ln.className=c; ln.textContent=line; gitOut.appendChild(ln);
-  });
-}
-async function git(action,extra){
-  const r=await fetch('/api/git',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify(Object.assign({action},extra||{}))});
-  const d=await r.json(); renderGit(d.output);
-}
-document.querySelectorAll('[data-git]').forEach(b=>b.onclick=()=>git(b.dataset.git));
-document.getElementById('gitCommit').onclick=()=>{
-  const message=document.getElementById('gitMsg').value.trim();
-  if(!message){renderGit('enter a commit message first.');return;}
-  git('commit',{message}).then(()=>{document.getElementById('gitMsg').value='';});
-};
-
-// ---- Web server ----
-const srvOut=document.getElementById('srvOut');
-function renderSrv(d){
-  if(d.running){ srvOut.innerHTML='serving working dir at <a class="link" target="_blank" href="'+d.url+'">'+d.url+'</a>'; }
-  else{ srvOut.textContent='server stopped.'; }
-}
-async function srv(action){
-  const port=document.getElementById('srvPort').value;
-  const r=await fetch('/api/server',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({action,port:parseInt(port)||8080})});
-  renderSrv(await r.json());
-}
-document.getElementById('srvStart').onclick=()=>srv('start');
-document.getElementById('srvStop').onclick=()=>srv('stop');
-document.getElementById('srvStatus').onclick=()=>srv('status');
 
 
 // ---- Providers / API keys panel ----
@@ -675,3 +625,4 @@ if(provTabBtn) provTabBtn.addEventListener('click', loadProviders);
 loadProviders();
 
 loadInfo();
+loadHealth();

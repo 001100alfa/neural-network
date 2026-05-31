@@ -45,6 +45,8 @@ class ToolContext:
     code_searcher: Any = None
     # optional audit sink: callable(name, args, status, detail) for tool runs
     audit: Any = None
+    # optional SandboxLimits for shell tools (resource caps + isolator)
+    sandbox: Any = None
     # when True, edits are approved hunk-by-hunk via ui.confirm_hunk (#9)
     per_hunk: bool = False
 
@@ -145,6 +147,7 @@ def default_registry() -> ToolRegistry:
     from .files import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
     from .git import GitCommitTool, GitDiffTool, GitStatusTool
     from .multiedit import MultiEditTool
+    from .refactor import RenameSymbolTool
     from .search import GlobTool, GrepTool, SearchCodeTool
     from .background import CheckBackgroundTool, RunBackgroundTool
     from .shell import RunShellTool
@@ -159,6 +162,7 @@ def default_registry() -> ToolRegistry:
             WriteFileTool(),
             EditFileTool(),
             MultiEditTool(),
+            RenameSymbolTool(),
             ListDirTool(),
             GlobTool(),
             GrepTool(),

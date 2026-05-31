@@ -15,7 +15,7 @@ from aio.providers import AssistantTurn, ToolCall
 
 def test_golden_suite_passes_offline():
     cases = golden_cases()
-    assert len(cases) >= 5                          # broadened beyond the first two
+    assert len(cases) >= 6                          # broadened benchmark suite
     card = run_suite(cases, reference_agent_factory, live=False)
     assert card.total == len(cases)
     assert card.passed == card.total, card.format()
@@ -78,6 +78,34 @@ def test_run_case_records_real_edits(tmp_path):
     result = run_case(case, reference_agent_factory)
     assert result.passed is True            # the independent pytest check confirms it
     assert "edit_file" in result.tools
+
+
+def test_scorecard_to_dict_is_machine_readable():
+    card = run_suite(golden_cases(), reference_agent_factory, live=False)
+    d = card.to_dict()
+    assert d["mode"] == "reference" and d["total"] == card.total
+    assert d["pass_rate"] == 1.0 and len(d["cases"]) == card.total
+    assert all(set(c) >= {"name", "passed", "tools", "tokens"} for c in d["cases"])
+
+
+def test_two_bug_case_makes_both_edits():
+    cases = {c.name: c for c in golden_cases()}
+    assert "fix-two-bugs-two-files" in cases
+    card = run_suite([cases["fix-two-bugs-two-files"]], reference_agent_factory, live=False)
+    r = card.results[0]
+    assert r.passed and r.tools.count("edit_file") == 2 and "run_shell" in r.tools
+
+
+def test_main_writes_json(tmp_path, monkeypatch, capsys):
+    import json as _json
+    monkeypatch.delenv("AIO_EVAL_LIVE", raising=False)
+    from aio.eval import main
+
+    out = tmp_path / "score.json"
+    rc = main(["--json", str(out)])
+    assert rc == 0
+    data = _json.loads(out.read_text())
+    assert data["mode"] == "reference" and data["passed"] == data["total"]
 
 
 def test_scorecard_dataclass_math():

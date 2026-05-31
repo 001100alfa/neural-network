@@ -42,6 +42,7 @@ class Agent:
         auto_context_k: int = 5,
         max_tool_calls: int = 0,
         deadline_s: float = 0.0,
+        max_reflections: int = 0,
     ) -> None:
         self.provider = provider
         self.tools = tools
@@ -67,6 +68,8 @@ class Agent:
         #: backpressure: cap tool calls / wall-clock per run() (0 = unlimited)
         self.max_tool_calls = int(max_tool_calls)
         self.deadline_s = float(deadline_s)
+        #: self-verify and continue up to N times after an answer (0 = off)
+        self.max_reflections = int(max_reflections)
         self.messages: list[Message] = []
         #: running summary of compacted (older) messages, fed via the system prompt
         self.summary: str = ""
@@ -248,13 +251,54 @@ class Agent:
             self.ui.info(f"compacted {len(head)} earlier messages into the summary")
 
     def run(self, user_input: str, images: list[dict] | None = None) -> str:
-        """Run one user turn to completion; returns the final assistant text."""
+        """Run a user turn; if reflection is enabled, verify and finish the work.
+
+        Plain mode is a single tool-loop. With ``max_reflections > 0`` the agent
+        also runs a verify→continue loop: after producing an answer it asks
+        itself whether the task is actually complete, and if not, keeps going
+        with the gap as a new instruction (bounded). This catches "looks done
+        but isn't" — closer to plan→execute→verify→replan than a linear loop.
+        """
+        self.run_usage = {"requests": 0, "input_tokens": 0, "output_tokens": 0,
+                          "cache_read": 0, "cache_write": 0}
+        result = self._run_once(user_input, images)
+        for _ in range(self.max_reflections):
+            gap = self._reflect()
+            if gap is None:
+                break
+            if hasattr(self.ui, "info"):
+                self.ui.info(f"self-review: not done yet — {gap[:120]}")
+            result = self._run_once(
+                f"Your previous attempt is incomplete: {gap}\n"
+                "Continue and finish the task; do not repeat work already done.", None)
+        return result
+
+    def _reflect(self) -> str | None:
+        """Ask the model to verify its own work; return a gap, or None if done."""
+        probe = Message(role="user", content=(
+            "Self-review: is the user's task now FULLY complete and verified "
+            "(e.g. tests run and passing where relevant)? Reply with exactly "
+            "'TASK_COMPLETE' if so, otherwise one short line stating what remains."))
+        try:
+            turn = self.provider.chat(self.messages + [probe], tools=[],
+                                      system=self._effective_system())
+        except Exception:  # pragma: no cover - never fail the run on a probe
+            return None
+        inp, out = self._normalise_usage(turn.usage)
+        self.run_usage["requests"] += 1
+        self.run_usage["input_tokens"] += inp
+        self.run_usage["output_tokens"] += out
+        text = (turn.content or "").strip()
+        if not text or "TASK_COMPLETE" in text.upper():
+            return None
+        return text[:500]
+
+    def _run_once(self, user_input: str, images: list[dict] | None = None) -> str:
+        """One tool-loop turn to completion; returns the final assistant text."""
 
         import time as _time
 
         self.messages.append(Message(role="user", content=user_input, images=images or []))
-        self.run_usage = {"requests": 0, "input_tokens": 0, "output_tokens": 0,
-                          "cache_read": 0, "cache_write": 0}
         self._retrieve_context(user_input)
         self._maybe_compact()
         final_text = ""

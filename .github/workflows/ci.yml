@@ -50,3 +50,41 @@ jobs:
         run: |
           python -m coverage run -m pytest -q
           python -m coverage report --fail-under=80
+
+  audit:
+    name: dependency audit
+    runs-on: ubuntu-latest
+    # Informational: zero runtime deps, so this should stay clean; surfaced as a
+    # signal rather than a hard gate (dev-tool advisories shouldn't block a PR).
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: "3.12"
+      - name: pip-audit (runtime deps only)
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          python -m pip install .
+          python -m pip_audit || pip-audit
+
+  docker:
+    name: docker image smoke test
+    runs-on: ubuntu-latest
+    # Informational until proven stable in CI: a brand-new infra job shouldn't
+    # gate merges; the test matrix is the real gate.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Build image
+        run: docker build -t aio:ci .
+      - name: Run and probe /health
+        run: |
+          docker run -d --name aio-ci -p 8765:8765 aio:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8765/health | grep -q '"status": "ok"'; then
+              echo "health OK"; docker rm -f aio-ci; exit 0
+            fi
+            sleep 1
+          done
+          echo "health check failed"; docker logs aio-ci; docker rm -f aio-ci; exit 1

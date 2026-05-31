@@ -24,6 +24,7 @@
          background:var(--panel)}
   header h1{font-size:16px;margin:0;letter-spacing:.5px}
   header h1 .tag{color:var(--accent)}
+  header h1 .ver{font-size:11px;font-weight:normal;color:var(--muted);letter-spacing:0}
   .badges{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto;align-items:center}
   select,input,button{background:var(--field);color:var(--text);border:1px solid var(--border);
         border-radius:6px;padding:6px 10px;font-size:13px}
