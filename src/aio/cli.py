@@ -47,6 +47,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--port", type=int, default=8765, help="Web dashboard port (default 8765).")
     p.add_argument("--open", action="store_true", help="Open the dashboard in the default browser (with --web).")
     p.add_argument("--plan", action="store_true", help="Plan mode: read-only; produce a plan, change nothing.")
+    p.add_argument("-c", "--continue", dest="cont", action="store_true",
+                   help="Resume the most recent CLI conversation.")
     p.add_argument("--list-tools", action="store_true", help="List tools and exit.")
     p.add_argument("--version", action="version", version=f"aio {__version__}")
     return p
@@ -210,6 +212,11 @@ def main(argv: list[str] | None = None) -> int:
 
     agent, mcp_servers = _make_agent(config, ui, no_mcp=args.no_mcp, plan_mode=args.plan)
 
+    if args.cont:
+        n = _load_cli_session(agent)
+        ui.info(f"resumed previous conversation ({n} messages).") if n else \
+            ui.warn("no previous conversation to resume.")
+
     try:
         if args.prompt:
             prompt = " ".join(args.prompt)
@@ -218,11 +225,65 @@ def main(argv: list[str] | None = None) -> int:
             except ProviderError as exc:
                 ui.error(str(exc))
                 return 1
+            _save_cli_session(agent)
             return 0
-        return repl(agent, config, ui)
+        rc = repl(agent, config, ui)
+        _save_cli_session(agent)
+        return rc
     finally:
         for server in mcp_servers:
             server.stop()
+
+
+def _cli_session_path() -> "Path":
+    import os
+    from pathlib import Path
+
+    env = os.environ.get("AIO_SESSIONS_DIR")
+    d = Path(env) if env else (Path.home() / ".config" / "aio" / "sessions")
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "cli-last.json"
+
+
+def _save_cli_session(agent) -> None:
+    import json
+
+    try:
+        data = [
+            {"role": m.role, "content": m.content,
+             "tool_calls": [{"id": c.id, "name": c.name, "arguments": c.arguments}
+                            for c in m.tool_calls],
+             "tool_call_id": m.tool_call_id, "name": m.name}
+            for m in agent.messages
+        ]
+        _cli_session_path().write_text(json.dumps(data), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _load_cli_session(agent) -> int:
+    import json
+
+    from .providers import Message, ToolCall
+
+    p = _cli_session_path()
+    if not p.is_file():
+        return 0
+    try:
+        data = json.loads(p.read_text("utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 0
+    agent.messages = [
+        Message(
+            role=d.get("role", "user"), content=d.get("content", "") or "",
+            tool_calls=[ToolCall(id=c.get("id", ""), name=c.get("name", ""),
+                                 arguments=c.get("arguments", {}) or {})
+                        for c in d.get("tool_calls", []) or []],
+            tool_call_id=d.get("tool_call_id"), name=d.get("name"),
+        )
+        for d in data
+    ]
+    return len(agent.messages)
 
 
 if __name__ == "__main__":

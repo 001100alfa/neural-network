@@ -380,9 +380,27 @@ class AgentService:
         self.agent.summary = self._summaries.get(conv_id, "")
         self._active_conv = conv_id
 
+    def _preprocess(self, message: str) -> str:
+        """Expand a custom /command and any @file mentions before sending."""
+        from .commands import expand_command, expand_mentions
+
+        msg = message
+        if msg.startswith("/"):
+            name, _, rest = msg[1:].partition(" ")
+            expanded = expand_command(self.config.workdir, name, rest.strip())
+            if expanded is not None:
+                msg = expanded
+        return expand_mentions(self.config.workdir, msg, self.config.allow_outside_workdir)
+
+    def list_commands(self) -> dict[str, Any]:
+        from .commands import list_commands as _lc
+
+        return {"commands": sorted(_lc(self.config.workdir).keys())}
+
     def chat(self, message: str, images=None, conv_id: str = "default") -> dict[str, Any]:
         with self._lock:
             self._select_conv(conv_id)
+            message = self._preprocess(message)
             self.ui.drain()
             try:
                 final = self.agent.run(message, images=images)
@@ -402,6 +420,7 @@ class AgentService:
         """
         with self._lock:
             self._select_conv(conv_id)
+            message = self._preprocess(message)
             self.ui.drain()
             self.ui.sink = emit
             try:
@@ -943,6 +962,8 @@ def _make_handler(service: AgentService):
                 self._json(200, service.mcp_info())
             elif self.path == "/api/checkpoints":
                 self._json(200, service.checkpoints_info())
+            elif self.path == "/api/commands":
+                self._json(200, service.list_commands())
             elif self.path.startswith("/api/chat/stream"):
                 self._chat_stream()
             else:
@@ -1608,10 +1629,18 @@ function addUserMsg(text, imgs){
 }
 
 function sysMsg(text){ const d=el('event'); d.appendChild(Object.assign(el('head'),{textContent:text})); log.appendChild(d); scroll(); }
+let customCommands=[];
+async function loadCommands(){ try{ const r=await fetch('/api/commands'); customCommands=(await r.json()).commands||[]; }catch(_){} }
 async function runSlash(text){
   const [cmd, ...rest]=text.slice(1).split(/\s+/); const arg=rest.join(' ').trim();
-  switch((cmd||'').toLowerCase()){
-    case 'help': sysMsg('commands: /new /clear /save /export [md|json] /provider <name> /model <name> /theme [light|dark] /help'); break;
+  const lc=(cmd||'').toLowerCase();
+  // custom commands (.aio/commands/*.md) are handled server-side: send as a message
+  if(customCommands.includes(lc) && !['help','new','clear','save','export','provider','model','theme'].includes(lc)){
+    return sendMsgText(text);
+  }
+  switch(lc){
+    case 'help': sysMsg('built-in: /new /clear /save /export [md|json] /provider /model /theme /help'
+      +(customCommands.length?('  ·  custom: '+customCommands.map(c=>'/'+c).join(' ')):'')); break;
     case 'new': switchConv(newConv()); break;
     case 'clear': document.getElementById('reset').click(); break;
     case 'save': document.getElementById('saveSession').click(); break;
@@ -1632,8 +1661,11 @@ async function runSlash(text){
 async function sendMsg(){
   const text=input.value.trim(); if(!text && pending.length===0) return;
   if(text.startsWith('/') && pending.length===0){ input.value=''; await runSlash(text); input.focus(); return; }
+  input.value=''; await sendMsgText(text);
+}
+async function sendMsgText(text){
   const imgs=pending.map(p=>({media_type:p.media_type,data:p.data}));
-  addUserMsg(text, pending); input.value=''; pending=[]; renderAttachments();
+  addUserMsg(text, pending); pending=[]; renderAttachments();
   send.disabled=true; const think=addThinking();
   let sawDiff=false, gotFirst=false;
   try{
@@ -1876,6 +1908,7 @@ if(mcpTabBtn) mcpTabBtn.addEventListener('click', loadMcp);
 
 // start with one conversation
 switchConv(newConv('Chat 1'));
+loadCommands();
 
 // ---- tabs ----
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
