@@ -192,6 +192,7 @@ class AgentService:
         self._static_httpd: ThreadingHTTPServer | None = None
         self._static_thread: threading.Thread | None = None
         self._static_port: int | None = None
+        self._restore_conversations()  # bring back live tabs from a previous run
         self._reload_mcp()  # also builds the agent
 
     def _make_agent_for(self, ui, messages, summary: str = "", provider=None) -> Agent:
@@ -449,6 +450,7 @@ class AgentService:
             self._todos = agent.ctx.todos
             self._accumulate_usage(agent)
             self._record_telemetry(agent, ok, _t.time() - t0)
+            self._persist_conversation(conv_id)
             return {"events": ui.drain(), "final": final, "usage": self.usage_info()}
 
     def _record_telemetry(self, agent, ok: bool, duration_s: float) -> None:
@@ -486,6 +488,7 @@ class AgentService:
             self._summaries[conv_id or "default"] = agent.summary
             self._todos = agent.ctx.todos
             self._accumulate_usage(agent)
+            self._persist_conversation(conv_id)
             emit({"type": "done", "final": final, "usage": self.usage_info()})
 
     def _accumulate_usage(self, agent=None) -> None:
@@ -542,8 +545,11 @@ class AgentService:
 
     def reset(self, conv_id: str = "default") -> dict[str, Any]:
         with self._lock:
-            self.conversations[conv_id or "default"] = []
+            cid = conv_id or "default"
+            self.conversations[cid] = []
+            self._summaries.pop(cid, None)
             self._select_conv(conv_id)
+            self._drop_persisted_conversation(cid)
             return {"ok": True}
 
     def close_conversation(self, conv_id: str) -> dict[str, Any]:
@@ -554,7 +560,14 @@ class AgentService:
             self._summaries.pop(conv_id, None)
             if self._active_conv == conv_id:
                 self._active_conv = "default"
+            self._drop_persisted_conversation(conv_id)
             return {"ok": True}
+
+    def _drop_persisted_conversation(self, conv_id: str) -> None:
+        try:
+            self._session_store().delete_conversation(conv_id or "default")
+        except Exception:  # pragma: no cover - never block on the store
+            pass
 
     # -- MCP panel -------------------------------------------------------
     def mcp_info(self) -> dict[str, Any]:
@@ -632,6 +645,35 @@ class AgentService:
             self._store = SessionStore(sdir / "sessions.db")
             self._store.migrate_legacy(sdir)
         return self._store
+
+    def _restore_conversations(self) -> None:
+        """Reload auto-persisted conversations so tabs survive a restart/crash."""
+        try:
+            saved = self._session_store().load_conversations()
+        except Exception:  # pragma: no cover - never block startup on the store
+            return
+        for conv_id, payload in saved.items():
+            msgs = [_msg_from_dict(m) for m in payload.get("messages", [])]
+            if msgs:
+                self.conversations[conv_id] = msgs
+                self._summaries[conv_id] = payload.get("summary", "")
+
+    def _persist_conversation(self, conv_id: str) -> None:
+        """Snapshot a conversation's working state to the store after a turn."""
+        import time as _t
+
+        conv_id = conv_id or "default"
+        try:
+            msgs = self.conversations.get(conv_id, [])
+            self._session_store().save_conversation(conv_id, {
+                "messages": [_msg_to_dict(m) for m in msgs],
+                "summary": self._summaries.get(conv_id, ""),
+                "provider": self.config.provider,
+                "model": self.config.active.model,
+                "updated": _t.time(),
+            })
+        except Exception:  # pragma: no cover - persistence must never break a turn
+            pass
 
     def save_session(self, title: str | None = None, session_id: str | None = None,
                      conv_id: str = "default") -> dict[str, Any]:

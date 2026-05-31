@@ -25,6 +25,23 @@ from pathlib import Path
 from typing import Any
 
 
+# Versioned schema migrations, applied in order via PRAGMA user_version. Add
+# new (version, [statements]) tuples here; never edit a shipped one.
+_MIGRATIONS: list[tuple[int, list[str]]] = [
+    (1, [
+        """CREATE TABLE IF NOT EXISTS sessions(
+               id TEXT PRIMARY KEY, title TEXT, provider TEXT, model TEXT,
+               created REAL, updated REAL, count INTEGER, data TEXT, body TEXT)""",
+        "CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated DESC)",
+    ]),
+    (2, [
+        """CREATE TABLE IF NOT EXISTS conversations(
+               conv_id TEXT PRIMARY KEY, data TEXT, updated REAL)""",
+    ]),
+]
+SCHEMA_VERSION = _MIGRATIONS[-1][0]
+
+
 class SessionStore:
     def __init__(self, db_path: str | Path) -> None:
         self.path = Path(db_path)
@@ -37,12 +54,14 @@ class SessionStore:
     # -- schema -----------------------------------------------------------
     def _init_schema(self) -> bool:
         c = self._conn
-        c.execute(
-            """CREATE TABLE IF NOT EXISTS sessions(
-                   id TEXT PRIMARY KEY, title TEXT, provider TEXT, model TEXT,
-                   created REAL, updated REAL, count INTEGER, data TEXT, body TEXT)"""
-        )
-        c.execute("CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated DESC)")
+        # WAL lets readers run concurrently with the single writer; NORMAL sync
+        # is the standard durable-enough setting for a local app DB.
+        try:
+            c.execute("PRAGMA journal_mode=WAL")
+            c.execute("PRAGMA synchronous=NORMAL")
+        except sqlite3.OperationalError:  # pragma: no cover - exotic FS
+            pass
+        self._apply_migrations()
         fts = False
         try:
             c.execute(
@@ -54,6 +73,19 @@ class SessionStore:
             fts = False
         c.commit()
         return fts
+
+    def _apply_migrations(self) -> None:
+        current = self._conn.execute("PRAGMA user_version").fetchone()[0]
+        for version, statements in _MIGRATIONS:
+            if version > current:
+                for sql in statements:
+                    self._conn.execute(sql)
+                self._conn.execute(f"PRAGMA user_version={int(version)}")
+        self._conn.commit()
+
+    @property
+    def schema_version(self) -> int:
+        return self._conn.execute("PRAGMA user_version").fetchone()[0]
 
     @property
     def fts_enabled(self) -> bool:
@@ -150,6 +182,28 @@ class SessionStore:
             "WHERE lower(title) LIKE lower(?) OR lower(body) LIKE lower(?)",
             (like, like),
         ).fetchall()
+
+    # -- live conversations (auto-persisted working state) ----------------
+    def save_conversation(self, conv_id: str, payload: dict[str, Any]) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO conversations(conv_id,data,updated) VALUES(?,?,?) "
+                "ON CONFLICT(conv_id) DO UPDATE SET data=excluded.data, updated=excluded.updated",
+                (conv_id, json.dumps(payload), payload.get("updated")),
+            )
+            self._conn.commit()
+
+    def load_conversations(self) -> dict[str, dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT conv_id, data FROM conversations ORDER BY updated"
+            ).fetchall()
+        return {r["conv_id"]: json.loads(r["data"]) for r in rows}
+
+    def delete_conversation(self, conv_id: str) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM conversations WHERE conv_id=?", (conv_id,))
+            self._conn.commit()
 
     # -- migration --------------------------------------------------------
     def migrate_legacy(self, sessions_dir: str | Path) -> int:

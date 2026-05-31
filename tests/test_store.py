@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import threading
 
-from aio.store import SessionStore
+from aio.store import SCHEMA_VERSION, SessionStore
 
 
 def _payload(sid, title, msgs, updated, provider="anthropic", model="m"):
@@ -97,6 +97,40 @@ def test_migrate_legacy_json(tmp_path):
     assert s.get("old1")["messages"][0]["content"] == "migrate me"
     # running again is a no-op (DB already populated)
     assert s.migrate_legacy(tmp_path) == 0
+
+
+def test_schema_version_and_wal_mode(tmp_path):
+    s = SessionStore(tmp_path / "s.db")
+    assert s.schema_version == SCHEMA_VERSION >= 2
+    mode = s._conn.execute("PRAGMA journal_mode").fetchone()[0]
+    assert mode.lower() == "wal"
+
+
+def test_migrations_are_idempotent(tmp_path):
+    db = tmp_path / "s.db"
+    s1 = SessionStore(db)
+    s1.save(_payload("a", "T", ["x"], updated=1))
+    v1 = s1.schema_version
+    s1.close()
+    # reopening an existing DB must not re-run migrations or lose data
+    s2 = SessionStore(db)
+    assert s2.schema_version == v1
+    assert s2.get("a")["title"] == "T"
+
+
+def test_conversation_persist_roundtrip(tmp_path):
+    s = SessionStore(tmp_path / "s.db")
+    assert s.load_conversations() == {}
+    s.save_conversation("work", {"messages": [{"role": "user", "content": "hi"}],
+                                 "summary": "sm", "updated": 5})
+    s.save_conversation("default", {"messages": [], "summary": "", "updated": 1})
+    s.save_conversation("work", {"messages": [{"role": "user", "content": "hi again"}],
+                                 "summary": "", "updated": 9})   # upsert
+    convs = s.load_conversations()
+    assert set(convs) == {"work", "default"}
+    assert convs["work"]["messages"][0]["content"] == "hi again"   # latest wins
+    s.delete_conversation("work")
+    assert set(s.load_conversations()) == {"default"}
 
 
 def test_concurrent_saves_are_safe(tmp_path):
