@@ -39,6 +39,8 @@ class ToolContext:
     depth: int = 0
     # background processes started by run_background (#4): id -> dict
     background: dict = field(default_factory=dict)
+    # lazily-built symbol index for find_symbol (#K)
+    code_index: Any = None
     # when True, edits are approved hunk-by-hunk via ui.confirm_hunk (#9)
     per_hunk: bool = False
 
@@ -142,6 +144,7 @@ def default_registry() -> ToolRegistry:
     from .search import GlobTool, GrepTool
     from .background import CheckBackgroundTool, RunBackgroundTool
     from .shell import RunShellTool
+    from .symbols import FindSymbolTool
     from .task import ParallelTasksTool, TaskTool
     from .todos import WriteTodosTool
     from .web import WebFetchTool
@@ -155,6 +158,7 @@ def default_registry() -> ToolRegistry:
             ListDirTool(),
             GlobTool(),
             GrepTool(),
+            FindSymbolTool(),
             RunShellTool(),
             GitStatusTool(),
             GitDiffTool(),

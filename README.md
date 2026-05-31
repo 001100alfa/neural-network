@@ -57,6 +57,10 @@ Requires Python **3.11+**.
   system prompt; a 🧠 badge in the dashboard shows when memory is active.
 - **Atomic multi-edit** — a `multi_edit` tool applies several find/replace edits
   to one file in order, all-or-nothing (no half-edited files).
+- **Symbol navigation** — a `find_symbol` tool jumps to where a function/class/
+  method is **defined** (file:line) via a cached, gitignore-aware symbol index
+  (Python via `ast`; JS/TS/Go/Rust/Ruby/Java via patterns) — precise navigation
+  instead of grepping.
 - **Context compaction** — long conversations are summarised automatically as
   they approach the context limit (recent turns kept verbatim) so sessions don't
   overflow the model's context window. Token estimates use a real tokenizer
