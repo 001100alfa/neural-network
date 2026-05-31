@@ -118,3 +118,16 @@ def test_scorecard_dataclass_math():
     card = Scorecard(results, live=True)  # type: ignore[arg-type]
     assert card.total == 2 and card.passed == 1 and card.pass_rate == 0.5
     assert "LIVE model" in card.format()
+
+
+def test_live_agent_factory_wires_without_calling_model(tmp_path, monkeypatch):
+    """The live path (AIO_EVAL_LIVE=1) must construct a real agent at setup;
+    only the actual model call needs a key/network, which we don't make here."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("AIO_KEYS_FILE", str(tmp_path / "k.json"))
+    monkeypatch.setenv("AIO_SESSIONS_DIR", str(tmp_path / "s"))
+    from aio.agent import Agent
+    from aio.eval import golden_cases, live_agent_factory
+
+    agent = live_agent_factory(golden_cases()[0], tmp_path)
+    assert isinstance(agent, Agent) and agent.provider is not None
