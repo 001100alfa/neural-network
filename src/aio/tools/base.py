@@ -165,6 +165,7 @@ def default_registry() -> ToolRegistry:
     from .git import GitCommitTool, GitDiffTool, GitStatusTool
     from .multiedit import MultiEditTool
     from .refactor import RenameSymbolTool
+    from .screenshot import ScreenshotTool
     from .search import GlobTool, GrepTool, SearchCodeTool
     from .background import CheckBackgroundTool, RunBackgroundTool
     from .shell import RunShellTool
@@ -198,6 +199,7 @@ def default_registry() -> ToolRegistry:
             TaskTool(),
             ParallelTasksTool(),
             WebFetchTool(),
+            ScreenshotTool(),
             RunBackgroundTool(),
             CheckBackgroundTool(),
         ]
