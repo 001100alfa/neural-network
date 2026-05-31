@@ -70,7 +70,7 @@ class MCPServer:
             {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {},
-                "clientInfo": {"name": "aio", "version": "0.1.1"},
+                "clientInfo": {"name": "aio", "version": "0.1.2"},
             },
         )
         self._notify("notifications/initialized", {})
