@@ -5,6 +5,6 @@ behind a single unified interface, with built-in file, search, shell, and git
 tools plus optional MCP server integration.
 """
 
-__version__ = "0.1.5"
+__version__ = "0.1.6"
 
 __all__ = ["__version__"]
