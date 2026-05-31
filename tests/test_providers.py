@@ -32,8 +32,11 @@ def test_anthropic_payload_shape():
     url, headers, body = p._build_payload(_conversation(), TOOLS, system="be good")
     assert url.endswith("/v1/messages")
     assert headers["x-api-key"] == "k"
-    assert body["system"] == "be good"
+    # with caching on (default) system is a content list carrying cache_control
+    assert body["system"][0]["text"] == "be good"
+    assert body["system"][0]["cache_control"]["type"] == "ephemeral"
     assert body["tools"][0]["input_schema"]["properties"]["path"]["type"] == "string"
+    assert body["tools"][-1]["cache_control"]["type"] == "ephemeral"  # tools cached too
     # tool_use block carried on the assistant message
     assistant = [m for m in body["messages"] if m["role"] == "assistant"][0]
     assert any(b["type"] == "tool_use" for b in assistant["content"])
@@ -122,6 +125,29 @@ def test_openai_parse():
     turn = p._parse_response(data)
     assert turn.content == "done"
     assert turn.tool_calls[0].arguments == {"path": "y"}
+
+
+def test_anthropic_caching_off_uses_plain_system():
+    p = AnthropicProvider(model="x", api_key="k", cache=False)
+    _, _, body = p._build_payload(_conversation(), TOOLS, system="sys")
+    assert body["system"] == "sys"
+    assert "cache_control" not in body["tools"][-1]
+
+
+def test_anthropic_extended_thinking():
+    p = AnthropicProvider(model="x", api_key="k", max_tokens=8000, thinking_tokens=4096)
+    _, _, body = p._build_payload([Message(role="user", content="hi")], [], None)
+    assert body["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+
+
+def test_openai_reasoning_effort():
+    from aio.providers.openai_compat import OpenAICompatProvider
+    p = OpenAICompatProvider(model="o3", api_key="k", thinking_tokens=20000)
+    _, _, body = p._build_payload([Message(role="user", content="hi")], [], None)
+    assert body["reasoning_effort"] == "high"
+    p2 = OpenAICompatProvider(model="o3", api_key="k", thinking_tokens=1000)
+    _, _, b2 = p2._build_payload([Message(role="user", content="hi")], [], None)
+    assert b2["reasoning_effort"] == "low"
 
 
 def test_anthropic_models_request_and_parse():

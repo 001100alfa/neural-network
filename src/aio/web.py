@@ -311,6 +311,8 @@ class AgentService:
             "plan_mode": self.plan_mode,
             "memory": bool(self.config.project_memory),
             "summary": bool(self._summaries.get(self._active_conv)),
+            "thinking_tokens": self.config.active.thinking_tokens,
+            "cache": self.config.active.cache,
         }
 
     def set_plan_mode(self, on: bool) -> dict[str, Any]:
@@ -318,6 +320,13 @@ class AgentService:
             self.plan_mode = bool(on)
             self._build_agent()
             return {"plan_mode": self.plan_mode}
+
+    def set_thinking(self, tokens: int) -> dict[str, Any]:
+        """Set the extended-thinking budget for the active provider (#9)."""
+        with self._lock:
+            self.config.active.thinking_tokens = max(0, int(tokens or 0))
+            self._build_agent()
+            return {"thinking_tokens": self.config.active.thinking_tokens}
 
     # -- checkpoints / rewind (#4) and todos (#7) ------------------------
     def checkpoints_info(self) -> dict[str, Any]:
@@ -993,6 +1002,8 @@ def _make_handler(service: AgentService):
                     self._json(200, service.set_plan_mode(bool(payload.get("on"))))
                 elif self.path == "/api/rewind":
                     self._json(200, service.rewind(payload.get("id")))
+                elif self.path == "/api/thinking":
+                    self._json(200, service.set_thinking(payload.get("tokens", 0)))
                 elif self.path == "/api/providers":
                     self._json(200, service.set_provider_key(
                         payload.get("provider", ""),
@@ -1177,7 +1188,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         background:var(--field);border:1px solid var(--border);border-radius:6px;padding:5px 8px;margin:8px 0}
   .usagebar b{color:var(--green)} .usagebar .bwarn{color:var(--red)}
   .sep{color:var(--border)}
-  #planBtn.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+  #planBtn.on,#thinkBtn.on{background:var(--accent);color:#fff;border-color:var(--accent)}
   .membadge{display:none;font-size:13px} .membadge.on{display:inline}
   .todobar{display:none;flex-direction:column;gap:3px;margin:8px 18px 0;padding:8px 10px;
         background:var(--panel);border:1px solid var(--border);border-radius:8px;font-size:12.5px}
@@ -1283,6 +1294,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <input id="importInput" type="file" accept="application/json,.json" style="display:none"/>
     <button id="planBtn" title="plan mode — read-only; produce a plan, change nothing">Plan</button>
     <button id="rewindBtn" title="undo the agent's last file change">↶ Rewind</button>
+    <button id="thinkBtn" title="extended thinking budget (off / 8k)">Think</button>
     <span id="memBadge" class="membadge" title="project memory loaded (CLAUDE.md/AGENTS.md)">🧠</span>
     <button id="gearBtn" title="settings">⚙</button>
   </div>
@@ -1501,7 +1513,14 @@ async function loadInfo(){
     document.getElementById('tools').appendChild(x);});
   document.getElementById('memBadge').classList.toggle('on', !!d.memory);
   document.getElementById('planBtn').classList.toggle('on', !!d.plan_mode);
+  document.getElementById('thinkBtn').classList.toggle('on', (d.thinking_tokens||0)>0);
 }
+document.getElementById('thinkBtn').onclick=async()=>{
+  const on=document.getElementById('thinkBtn').classList.contains('on');
+  await fetch('/api/thinking',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({tokens:on?0:8000})});
+  loadInfo();
+};
 document.getElementById('planBtn').onclick=async()=>{
   const on=!document.getElementById('planBtn').classList.contains('on');
   await fetch('/api/plan',{method:'POST',headers:{'Content-Type':'application/json'},

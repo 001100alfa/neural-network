@@ -91,6 +91,17 @@ def test_plan_mode_and_memory(tmp_path, monkeypatch):
     assert svc.agent.plan_mode is False
 
 
+def test_set_thinking_updates_provider(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    assert svc.info()["thinking_tokens"] == 0
+    out = svc.set_thinking(8000)
+    assert out["thinking_tokens"] == 8000
+    assert svc.config.active.thinking_tokens == 8000
+    assert svc.agent.provider.thinking_tokens == 8000
+    # caching defaults on and is reported
+    assert svc.info()["cache"] is True
+
+
 def test_rewind_undoes_edits(tmp_path, monkeypatch):
     from aio.tools.files import EditFileTool, WriteFileTool
 

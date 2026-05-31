@@ -49,6 +49,13 @@ class OpenAICompatProvider(Provider):
                 for t in tools
             ]
             body["tool_choice"] = "auto"
+        # Extended thinking (#9): OpenAI-style reasoning models take an effort
+        # level rather than a token budget.
+        if self.thinking_tokens > 0:
+            body["reasoning_effort"] = (
+                "low" if self.thinking_tokens < 4096
+                else "high" if self.thinking_tokens > 16000 else "medium"
+            )
         body.update(self.extra)
         return url, headers, body
 

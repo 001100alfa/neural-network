@@ -62,6 +62,13 @@ Requires Python **3.11+**.
   (restoring prior contents, or deleting files it created).
 - **Task list** — a `write_todos` tool lets the agent plan and track multi-step
   work; the current checklist shows above the chat.
+- **Prompt caching** — on Anthropic, the (stable) system prompt and tool
+  definitions are sent with `cache_control`, cutting cost/latency on repeated
+  turns. On by default (`providers.<name>.cache = false` to disable).
+- **Extended thinking** — give the model a reasoning budget: the **Think**
+  button in the dashboard, or `providers.<name>.thinking_tokens` in config
+  (Anthropic uses a token budget; OpenAI-style models map it to
+  `reasoning_effort`).
 
 ## Portable — run on Windows 11 (no install)
 

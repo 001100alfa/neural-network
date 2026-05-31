@@ -112,6 +112,8 @@ class ProviderConfig:
     base_url: str | None = None
     max_tokens: int = 4096
     extra: dict[str, Any] = field(default_factory=dict)
+    cache: bool = True            # provider prompt caching (#8)
+    thinking_tokens: int = 0      # extended-thinking budget, 0 = off (#9)
 
 
 @dataclass
@@ -198,6 +200,8 @@ def load_config(
             base_url=fp.get("base_url", defaults["base_url"]),
             max_tokens=int(fp.get("max_tokens", 4096)),
             extra=fp.get("extra", {}),
+            cache=bool(fp.get("cache", True)),
+            thinking_tokens=int(fp.get("thinking_tokens", 0)),
         )
 
     mcp_servers = file_cfg.get("mcp", {}).get("servers", [])
