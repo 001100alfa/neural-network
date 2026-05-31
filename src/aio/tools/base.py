@@ -147,6 +147,7 @@ def default_registry() -> ToolRegistry:
     from .files import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
     from .git import GitCommitTool, GitDiffTool, GitStatusTool
     from .multiedit import MultiEditTool
+    from .refactor import RenameSymbolTool
     from .search import GlobTool, GrepTool, SearchCodeTool
     from .background import CheckBackgroundTool, RunBackgroundTool
     from .shell import RunShellTool
@@ -161,6 +162,7 @@ def default_registry() -> ToolRegistry:
             WriteFileTool(),
             EditFileTool(),
             MultiEditTool(),
+            RenameSymbolTool(),
             ListDirTool(),
             GlobTool(),
             GrepTool(),
