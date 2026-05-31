@@ -39,6 +39,44 @@ class GlobTool(Tool):
         return "\n".join(_relpath(p, ctx) for p in matches)
 
 
+class SearchCodeTool(Tool):
+    name = "search_code"
+    description = (
+        "Search the codebase by keywords or a natural-language query and get "
+        "the most RELEVANT code chunks, ranked by BM25, as file:line + snippet. "
+        "Use this to explore 'where is X handled / how does Y work' when you "
+        "don't know the exact name. For an exact definition use find_symbol; "
+        "for a literal/regex pattern use grep."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Keywords or a question, e.g. 'retry backoff on rate limit'."},
+            "limit": {"type": "integer", "description": "Maximum results to return (default 8)."},
+            "rebuild": {"type": "boolean", "description": "Force a fresh index scan."},
+        },
+        "required": ["query"],
+    }
+
+    def run(self, args: dict[str, Any], ctx: ToolContext) -> str:
+        query = (args.get("query") or "").strip()
+        if not query:
+            raise ToolError("search_code requires a 'query'.")
+        if ctx.code_searcher is None or args.get("rebuild"):
+            from ..search import CodeSearcher
+
+            ctx.code_searcher = CodeSearcher(ctx.workdir).build()
+        hits = ctx.code_searcher.search(query, k=int(args.get("limit", 8)))
+        if not hits:
+            return f"No code matching {query!r} ({len(ctx.code_searcher.chunks)} chunks indexed)."
+        blocks = []
+        for h in hits:
+            head = f"{h['path']}:{h['start_line']}-{h['end_line']}  (score {h['score']})"
+            snippet = "\n".join(h["snippet"].splitlines()[:12])
+            blocks.append(f"{head}\n{snippet}")
+        return "\n\n".join(blocks)
+
+
 class GrepTool(Tool):
     name = "grep"
     description = "Search file contents for a regular expression. Returns matching lines with file:line prefixes."

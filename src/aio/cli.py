@@ -46,6 +46,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--host", default="127.0.0.1", help="Web dashboard host (default 127.0.0.1).")
     p.add_argument("--port", type=int, default=8765, help="Web dashboard port (default 8765).")
     p.add_argument("--open", action="store_true", help="Open the dashboard in the default browser (with --web).")
+    p.add_argument("--web-token", default=None,
+                   help="Use this access token for the dashboard instead of a random one.")
+    p.add_argument("--web-no-auth", action="store_true",
+                   help="Disable dashboard authentication (UNSAFE; only on a trusted, isolated host).")
+    p.add_argument("--web-auto-approve", action="store_true",
+                   help="Auto-approve all tool calls in the dashboard (UNSAFE; skips the approval gate).")
+    p.add_argument("--web-tls-cert", default=None, help="Serve the dashboard over HTTPS with this cert (PEM).")
+    p.add_argument("--web-tls-key", default=None, help="Private key (PEM) for --web-tls-cert.")
     p.add_argument("--plan", action="store_true", help="Plan mode: read-only; produce a plan, change nothing.")
     p.add_argument("-c", "--continue", dest="cont", action="store_true",
                    help="Resume the most recent CLI conversation.")
@@ -68,7 +76,7 @@ def _make_agent(config, ui: UI, no_mcp: bool, plan_mode: bool = False, per_hunk:
     provider = build_provider(config)
     registry = default_registry()
 
-    mcp_servers = []
+    mcp_servers: list = []
     if not no_mcp and config.mcp_servers:
         mcp_tools, mcp_servers = load_mcp_tools(config.mcp_servers, ui=ui)
         for t in mcp_tools:
@@ -96,6 +104,8 @@ def _make_agent(config, ui: UI, no_mcp: bool, plan_mode: bool = False, per_hunk:
         max_steps=config.max_steps,
         plan_mode=plan_mode,
         hooks=HookRunner(config.hooks, config.workdir),
+        auto_context=config.auto_context,
+        auto_context_k=config.auto_context_results,
     )
     return agent, mcp_servers
 
@@ -219,7 +229,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.web:
         from .web import serve
 
-        serve(config, host=args.host, port=args.port, open_browser=args.open)
+        serve(config, host=args.host, port=args.port, open_browser=args.open,
+              token=args.web_token, require_auth=not args.web_no_auth,
+              auto_approve=args.web_auto_approve,
+              tls_cert=args.web_tls_cert, tls_key=args.web_tls_key)
         return 0
 
     agent, mcp_servers = _make_agent(config, ui, no_mcp=args.no_mcp, plan_mode=args.plan,

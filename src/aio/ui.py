@@ -59,6 +59,11 @@ class UI:
         if not self.quiet:
             print(self._c(text, Color.DIM))
 
+    def token(self, delta: str) -> None:
+        """Stream a chunk of assistant text (base prints inline; web UI overrides)."""
+        if delta:
+            print(delta, end="", flush=True)
+
     def tool_call(self, name: str, args: dict) -> None:
         rendered = ", ".join(f"{k}={_short(v)}" for k, v in args.items())
         head = self._c(f"⚙ {name}", Color.BLUE)

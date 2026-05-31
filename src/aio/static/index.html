@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>AIO — Coding Agent Dashboard</title>
+<link rel="stylesheet" href="app.css"/>
+</head>
+<body>
+<header>
+  <h1>AIO <span class="tag">●</span> coding agent</h1>
+  <div class="badges">
+    <span><span class="dot"></span><span id="provider">…</span> / <span id="model">…</span></span>
+    <select id="providerSel" title="switch provider">
+      <option>anthropic</option><option>openai</option><option>google</option>
+      <option>groq</option><option>mistral</option><option>deepseek</option>
+      <option>xai</option><option>together</option><option>openrouter</option><option>ollama</option>
+    </select>
+    <input id="modelInput" placeholder="model name" size="16"/>
+    <button id="apply">Apply</button>
+    <span class="sep">·</span>
+    <input id="searchInput" placeholder="🔎 search chats" size="13" autocomplete="off"/>
+    <div id="searchResults" class="searchres"></div>
+    <button id="saveSession" title="save this conversation">Save chat</button>
+    <select id="sessionSel" title="saved sessions"><option value="">sessions…</option></select>
+    <button id="loadSession">Load</button>
+    <button id="reset">Clear</button>
+    <span class="sep">·</span>
+    <button id="exportMd" title="export as Markdown">⤓ MD</button>
+    <button id="exportJson" title="export as JSON">⤓ JSON</button>
+    <button id="importBtn" title="import a JSON conversation">Import</button>
+    <input id="importInput" type="file" accept="application/json,.json" style="display:none"/>
+    <button id="planBtn" title="plan mode — read-only; produce a plan, change nothing">Plan</button>
+    <button id="rewindBtn" title="undo the agent's last file change">↶ Rewind</button>
+    <button id="thinkBtn" title="extended thinking budget (off / 8k)">Think</button>
+    <span id="memBadge" class="membadge" title="project memory loaded (CLAUDE.md/AGENTS.md)">🧠</span>
+    <button id="gearBtn" title="settings">⚙</button>
+  </div>
+  <div id="settingsPanel" class="settings">
+    <div class="srow"><span>Theme</span>
+      <select id="themeSel"><option value="dark">Dark</option><option value="light">Light</option></select>
+    </div>
+    <div class="srow"><span>Font size</span>
+      <span><button id="fzMinus">−</button> <span id="fzVal">14</span>px <button id="fzPlus">+</button></span>
+    </div>
+    <div class="srow"><span>Output style</span>
+      <select id="styleSel">
+        <option value="default">default</option><option value="concise">concise</option>
+        <option value="explanatory">explanatory</option><option value="teacher">teacher</option>
+      </select>
+    </div>
+  </div>
+</header>
+<div class="layout">
+  <aside>
+    <h3>Working dir</h3>
+    <div id="workdir" style="color:var(--muted);word-break:break-all;margin-bottom:16px"></div>
+    <h3>Tools</h3>
+    <div id="tools"></div>
+  </aside>
+  <main>
+    <div id="convTabs" class="convtabs"></div>
+    <div id="todoBar" class="todobar"></div>
+    <div id="log"></div>
+    <div id="attachBar" class="attachbar"></div>
+    <footer>
+      <input id="fileInput" type="file" multiple style="display:none"/>
+      <button id="attachBtn" title="attach image(s)">📎</button>
+      <textarea id="input" placeholder="Ask the agent to do something… (Enter to send, Shift+Enter for newline)"></textarea>
+      <button id="send">Send</button>
+    </footer>
+  </main>
+  <div class="panel">
+    <div class="tabs">
+      <button data-tab="editor" class="active">Editor</button>
+      <button data-tab="providers">Providers</button>
+      <button data-tab="mcp">MCP</button>
+      <button data-tab="terminal">Terminal</button>
+      <button data-tab="git">Git</button>
+      <button data-tab="server">Web server</button>
+    </div>
+
+    <div class="tab" id="tab-mcp">
+      <div class="phdr">
+        <b>MCP servers</b>
+        <span class="muted">stdio Model Context Protocol servers — their tools are added to the agent</span>
+      </div>
+      <div id="mcpList"></div>
+      <div class="mcpadd">
+        <input id="mcpName" placeholder="name (e.g. filesystem)"/>
+        <input id="mcpCmd" placeholder="command (e.g. npx)"/>
+        <input id="mcpArgs" placeholder="args (e.g. -y @modelcontextprotocol/server-filesystem .)"/>
+        <input id="mcpEnv" placeholder="env (KEY=value, space/newline separated — for tokens)"/>
+        <div class="row">
+          <button id="mcpAdd">Add &amp; start</button>
+          <button id="mcpRestart">Restart all</button>
+        </div>
+      </div>
+      <div class="mcpcathdr">Open-source servers for coding &amp; project work
+        <span class="muted">— "Use" fills the form (edit path/token, then Add)</span></div>
+      <input id="mcpCatFilter" placeholder="filter catalog…" style="margin-bottom:6px"/>
+      <div id="mcpCatalog" class="provlist"></div>
+    </div>
+
+    <div class="tab" id="tab-providers">
+      <div class="phdr">
+        <b>AI providers &amp; API keys</b>
+        <span class="muted">keys are stored locally (chmod 600) and never sent anywhere except the provider you pick</span>
+      </div>
+      <div id="usageBar" class="usagebar" title="estimated; session totals">usage: —</div>
+      <div id="provList" class="provlist"></div>
+    </div>
+
+    <div class="tab active" id="tab-editor">
+      <div class="row">
+        <select id="edFile"><option value="">— open a file —</option></select>
+        <button id="edReload" title="reload file tree">⟳</button>
+      </div>
+      <div id="edTabs" class="edtabs"></div>
+      <div class="editor-wrap">
+        <div class="gutter" id="edGutter"><div class="nums" id="edNums">1</div></div>
+        <div class="code-area">
+          <pre class="hl" id="edHLpre"><code id="edHL"></code></pre>
+          <textarea id="edText" spellcheck="false" wrap="off" placeholder="select a file to edit…"></textarea>
+        </div>
+        <div class="findbar" id="edFindBar">
+          <div class="frow">
+            <input id="edFindInput" placeholder="find" spellcheck="false"/>
+            <span class="cnt" id="edFindCnt">0/0</span>
+            <button id="edFindPrev" title="previous (Shift+Enter)">↑</button>
+            <button id="edFindNext" title="next (Enter)">↓</button>
+            <button id="edFindClose" title="close (Esc)">×</button>
+          </div>
+          <div class="frow">
+            <input id="edReplaceInput" placeholder="replace" spellcheck="false"/>
+            <button id="edReplaceOne" title="replace current match">Replace</button>
+            <button id="edReplaceAll" title="replace all matches">All</button>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <span id="edStatus" class="muted" style="flex:1;align-self:center"></span>
+        <button id="edRevert">Revert</button>
+        <button id="edSave">Save</button>
+      </div>
+    </div>
+
+    <div class="tab" id="tab-terminal">
+      <div class="console" id="termOut">$ run shell / bash commands here (executed directly, not via the model)
+</div>
+      <div class="row">
+        <select id="termShell"><option>bash</option><option>sh</option><option>cmd</option></select>
+        <input id="termCmd" placeholder="e.g. ls -la  /  npm test"/>
+        <button id="termRun">Run</button>
+      </div>
+    </div>
+
+    <div class="tab" id="tab-git">
+      <div class="gitbtns">
+        <button data-git="status">status</button>
+        <button data-git="diff">diff</button>
+        <button data-git="diff_staged">staged</button>
+        <button data-git="log">log</button>
+        <button data-git="add">add -A</button>
+      </div>
+      <div class="console diff" id="gitOut">git output…
+</div>
+      <div class="row">
+        <input id="gitMsg" placeholder="commit message"/>
+        <button id="gitCommit">Commit</button>
+      </div>
+    </div>
+
+    <div class="tab" id="tab-server">
+      <div class="console" id="srvOut">Serve the working directory as static files.
+</div>
+      <div class="row">
+        <input id="srvPort" value="8080" style="max-width:90px"/>
+        <button id="srvStart">Start</button>
+        <button id="srvStop">Stop</button>
+        <button id="srvStatus">Status</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

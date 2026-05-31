@@ -43,5 +43,10 @@ jobs:
       - name: Lint (pyflakes)
         run: python -m pyflakes src tests
 
-      - name: Run tests
-        run: python -m pytest -q
+      - name: Type-check (mypy)
+        run: python -m mypy
+
+      - name: Run tests with a coverage gate
+        run: |
+          python -m coverage run -m pytest -q
+          python -m coverage report --fail-under=80

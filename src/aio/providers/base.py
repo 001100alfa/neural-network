@@ -136,7 +136,7 @@ class Provider(ABC):
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     return json.loads(resp.read().decode("utf-8"))
-            except urllib.error.HTTPError as exc:  # pragma: no cover - network path
+            except urllib.error.HTTPError as exc:
                 detail = exc.read().decode("utf-8", "replace")
                 if exc.code in self.RETRY_STATUS and attempt < self.max_retries:
                     delay = self._retry_delay(exc, attempt)
@@ -146,7 +146,7 @@ class Provider(ABC):
                 raise ProviderError(
                     f"{self.name} request failed: HTTP {exc.code}\n{detail}"
                 ) from exc
-            except urllib.error.URLError as exc:  # pragma: no cover - network path
+            except urllib.error.URLError as exc:
                 if attempt < self.max_retries:
                     attempt += 1
                     time.sleep(2 ** (attempt - 1))

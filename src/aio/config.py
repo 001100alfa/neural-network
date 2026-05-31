@@ -157,6 +157,9 @@ class Config:
     output_style: str = "default"
     #: OpenTelemetry-style telemetry settings (#8)
     telemetry: dict[str, Any] = field(default_factory=dict)
+    #: auto-retrieve relevant code (BM25) and inject it into context each turn
+    auto_context: bool = True
+    auto_context_results: int = 5
 
     @property
     def active(self) -> ProviderConfig:
@@ -253,6 +256,9 @@ def load_config(
         permissions=file_cfg.get("permissions", {}) or {},
         output_style=file_cfg.get("output_style", "default"),
         telemetry=file_cfg.get("telemetry", {}) or {},
+        auto_context=bool(overrides.get("auto_context",
+                          file_cfg.get("auto_context", os.environ.get("AIO_NO_AUTO_CONTEXT") != "1"))),
+        auto_context_results=int(file_cfg.get("auto_context_results", 5)),
     )
 
 

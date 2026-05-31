@@ -57,7 +57,7 @@ class RunShellTool(Tool):
         cap = MAX_OUTPUT * 2
         head: list[str] = []
         head_len = 0
-        tail = collections.deque()  # (chunk, len) for the most recent bytes
+        tail: collections.deque = collections.deque()  # (chunk, len) of recent bytes
         tail_len = 0
 
         def absorb(chunk: str) -> None:
