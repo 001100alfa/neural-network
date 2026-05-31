@@ -12,6 +12,14 @@ setlocal
 cd /d "%~dp0"
 set "PYTHONPATH=%~dp0src"
 
+REM If a portable toolchain was set up (setup-tools.bat), put it first on PATH so
+REM the agent's git/bash/grep calls resolve to the bundled Unix tools — the
+REM Docker-free way to give AIO a Linux-style toolchain on Windows.
+if exist "%~dp0tools\cmd\git.exe" (
+  set "PATH=%~dp0tools\cmd;%~dp0tools\usr\bin;%~dp0tools\mingw64\bin;%PATH%"
+  echo [AIO] Using the portable toolchain in tools\ ^(git/bash/grep, no Docker^).
+)
+
 REM PYEXE = program, PYARGS = extra args (kept separate so paths with spaces
 REM can be quoted while the 'py -3' launcher keeps its argument).
 set "PYEXE="
