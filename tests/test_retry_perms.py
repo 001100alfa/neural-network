@@ -69,7 +69,7 @@ def test_permission_deny_blocks_tool(tmp_path):
     ag = Agent(P(), default_registry(), ctx, ui, "sys", max_steps=4)
     ag.run("commit it")
     tool_msg = next(m for m in ag.messages if m.role == "tool")
-    assert "denied by the permission settings" in tool_msg.content
+    assert "denied" in tool_msg.content and "git_commit" in tool_msg.content
 
 
 def test_permission_allow_skips_prompt(tmp_path):

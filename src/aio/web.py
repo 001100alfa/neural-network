@@ -225,6 +225,8 @@ def _make_handler(service: AgentService, guard: "WebGuard | None" = None,
                     self._json(200, service.configure(payload.get("provider"), payload.get("model")))
                 elif self.path == "/api/plan":
                     self._json(200, service.set_plan_mode(bool(payload.get("on"))))
+                elif self.path == "/api/permission-mode":
+                    self._json(200, service.set_permission_mode(payload.get("mode", "default")))
                 elif self.path == "/api/rewind":
                     self._json(200, service.rewind(payload.get("id")))
                 elif self.path == "/api/thinking":

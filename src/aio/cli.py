@@ -38,7 +38,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-m", "--model", help="Model name (overrides config).")
     p.add_argument("-C", "--workdir", default=".", help="Working directory (default: cwd).")
     p.add_argument("--config", help="Path to a config TOML file.")
-    p.add_argument("-y", "--yes", action="store_true", help="Auto-approve all tool calls.")
+    p.add_argument("-y", "--yes", action="store_true", help="Auto-approve all tool calls (= --permission-mode admin).")
+    p.add_argument("--permission-mode", choices=["plan", "default", "accept_edits", "admin"],
+                   help="How tool calls are approved: plan (read-only), default (ask), "
+                        "accept_edits (auto-approve edits, ask for shell), admin (elevated; auto-approve all).")
     p.add_argument("--allow-outside", action="store_true", help="Allow file access outside the workdir.")
     p.add_argument("--max-steps", type=int, help="Max agent steps per turn.")
     p.add_argument("--context-window", type=int, metavar="TOKENS",
@@ -94,6 +97,7 @@ def _make_agent(config, ui: UI, no_mcp: bool, plan_mode: bool = False, per_hunk:
         auto_approve=config.auto_approve,
         allow_outside_workdir=config.allow_outside_workdir,
         permissions=dict(config.permissions),
+        permission_mode=config.permission_mode,
         per_hunk=per_hunk,
     )
     system_prompt = config.system_prompt
@@ -209,7 +213,13 @@ def main(argv: list[str] | None = None) -> int:
         overrides["provider"] = args.provider
     if args.model:
         overrides["model"] = args.model
-    if args.yes:
+    # Permission mode: --permission-mode wins; --plan and -y are shortcuts.
+    if args.permission_mode:
+        overrides["permission_mode"] = args.permission_mode
+    elif args.plan:
+        overrides["permission_mode"] = "plan"
+    elif args.yes:
+        overrides["permission_mode"] = "admin"
         overrides["auto_approve"] = True
     if args.allow_outside:
         overrides["allow_outside_workdir"] = True

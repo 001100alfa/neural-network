@@ -175,6 +175,8 @@ class Config:
     max_reflections: int = 0
     #: usable context window in tokens; 0 = auto-detect from the model name
     context_window: int = 0
+    #: unified permission mode: plan | default | accept_edits | admin
+    permission_mode: str = "default"
 
     @property
     def active(self) -> ProviderConfig:
@@ -244,6 +246,12 @@ def _auto_detect_provider(file_cfg: dict[str, Any]) -> str:
     return "ollama"  # local fallback, no key needed
 
 
+def _norm_perm_mode(value: Any) -> str:
+    from .permissions import normalize
+
+    return normalize(value if value else "default")
+
+
 def load_config(
     workdir: Path | None = None,
     overrides: dict[str, Any] | None = None,
@@ -311,6 +319,8 @@ def load_config(
         max_reflections=int(overrides.get("max_reflections", file_cfg.get("max_reflections", 0))),
         context_window=int(overrides.get("context_window",
                            file_cfg.get("context_window", os.environ.get("AIO_CONTEXT_WINDOW", 0)) or 0)),
+        permission_mode=_norm_perm_mode(overrides.get("permission_mode",
+                           file_cfg.get("permission_mode", os.environ.get("AIO_PERMISSION_MODE")))),
     )
 
 
