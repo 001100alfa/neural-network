@@ -18,6 +18,22 @@ AIO_EVAL_LIVE=1 ANTHROPIC_API_KEY=sk-... python -m aio.eval --json results-live.
 The scorecard prints pass/total, per-case tool calls, tokens and timing, and
 `--json` writes a machine-readable record you can commit and diff over time.
 
+### Recording a baseline and catching regressions
+
+`aio-benchmark` (`python -m aio.benchmark`) wraps the harness so a real-model run
+is reproducible and **comparable over time**:
+
+```bash
+# Record a baseline against a real model (do this once, commit the file).
+AIO_EVAL_LIVE=1 ANTHROPIC_API_KEY=sk-... python -m aio.benchmark --save baseline.json
+
+# Later, compare a fresh run to it — exits non-zero if any case REGRESSED.
+AIO_EVAL_LIVE=1 ANTHROPIC_API_KEY=sk-... python -m aio.benchmark --compare baseline.json
+```
+
+`--compare` reports the pass-rate delta and per-case regressions/fixes, so a
+model or harness change that breaks a previously-passing task fails loudly.
+
 ## Cases (current golden suite)
 
 | Case | Capability exercised |
