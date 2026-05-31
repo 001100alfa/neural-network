@@ -62,6 +62,12 @@ Requires Python **3.11+**.
   (restoring prior contents, or deleting files it created).
 - **Task list** — a `write_todos` tool lets the agent plan and track multi-step
   work; the current checklist shows above the chat.
+- **Custom slash commands** — drop a Markdown file in `.aio/commands/` (or
+  `~/.config/aio/commands/`); its body is the prompt, with `$ARGUMENTS` / `$1…`
+  substituted. `review.md` → type `/review src/app.py`.
+- **@file mentions** — `@path` in a message inlines that file's contents into
+  the prompt (sandboxed to the working dir).
+- **Resume (CLI)** — `aio --continue` reopens your most recent CLI conversation.
 - **Prompt caching** — on Anthropic, the (stable) system prompt and tool
   definitions are sent with `cache_control`, cutting cost/latency on repeated
   turns. On by default (`providers.<name>.cache = false` to disable).
