@@ -75,10 +75,21 @@ class RunShellTool(Tool):
                 old = tail.popleft()
                 tail_len -= len(old)
 
+        # OS-level sandbox: cap CPU / file-size / core dumps for the child, and
+        # confine it with an external isolator (bwrap/firejail) when available.
+        from ..sandbox import SandboxLimits, preexec, wrapper_argv
+
+        limits = getattr(ctx, "sandbox", None) or SandboxLimits()
+        run_cmd: Any = command
+        prefix = wrapper_argv(str(ctx.workdir), network=limits.network)
+        if prefix:  # pragma: no cover - only when an isolator is installed
+            run_cmd = prefix + ["bash", "-lc", command]
+
         try:
             proc = subprocess.Popen(
-                command, shell=True, cwd=str(ctx.workdir),
+                run_cmd, shell=(not prefix), cwd=str(ctx.workdir),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+                preexec_fn=preexec(limits),
             )
             try:
                 assert proc.stdout is not None

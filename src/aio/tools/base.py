@@ -45,6 +45,8 @@ class ToolContext:
     code_searcher: Any = None
     # optional audit sink: callable(name, args, status, detail) for tool runs
     audit: Any = None
+    # optional SandboxLimits for shell tools (resource caps + isolator)
+    sandbox: Any = None
     # when True, edits are approved hunk-by-hunk via ui.confirm_hunk (#9)
     per_hunk: bool = False
 
