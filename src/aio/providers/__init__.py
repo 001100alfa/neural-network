@@ -56,4 +56,6 @@ def build_provider(config: "Config") -> Provider:
         base_url=pc.base_url,
         max_tokens=pc.max_tokens,
         extra=pc.extra,
+        cache=pc.cache,
+        thinking_tokens=pc.thinking_tokens,
     )

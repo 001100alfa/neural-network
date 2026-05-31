@@ -34,10 +34,23 @@ class AnthropicProvider(Provider):
             "max_tokens": self.max_tokens,
             "messages": self._convert_messages(messages),
         }
+        # Extended thinking (#9): reserve a reasoning budget; max_tokens must
+        # exceed it, and temperature must be default when thinking is on.
+        if self.thinking_tokens > 0:
+            budget = min(self.thinking_tokens, max(1024, self.max_tokens - 1024))
+            body["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            if budget >= self.max_tokens:
+                body["max_tokens"] = budget + 1024
         if system:
-            body["system"] = system
+            # Prompt caching (#8): cache the (large, stable) system prompt.
+            if self.cache:
+                body["system"] = [
+                    {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+                ]
+            else:
+                body["system"] = system
         if tools:
-            body["tools"] = [
+            tool_list = [
                 {
                     "name": t["name"],
                     "description": t.get("description", ""),
@@ -45,6 +58,10 @@ class AnthropicProvider(Provider):
                 }
                 for t in tools
             ]
+            # Cache the tool definitions too (mark the last tool — covers all).
+            if self.cache and tool_list:
+                tool_list[-1]["cache_control"] = {"type": "ephemeral"}
+            body["tools"] = tool_list
         body.update(self.extra)
         return url, headers, body
 

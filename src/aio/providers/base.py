@@ -75,6 +75,8 @@ class Provider(ABC):
         timeout: float = 180.0,
         max_tokens: int = 4096,
         extra: dict[str, Any] | None = None,
+        cache: bool = True,
+        thinking_tokens: int = 0,
     ) -> None:
         self.model = model
         self.api_key = api_key
@@ -82,6 +84,10 @@ class Provider(ABC):
         self.timeout = timeout
         self.max_tokens = max_tokens
         self.extra = extra or {}
+        #: enable provider prompt caching where supported (#8)
+        self.cache = cache
+        #: extended-thinking budget in tokens (0 = off) (#9)
+        self.thinking_tokens = int(thinking_tokens or 0)
 
     # -- subclasses implement these three ---------------------------------
 
