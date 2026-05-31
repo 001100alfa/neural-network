@@ -250,6 +250,9 @@ class AgentService:
         system_prompt = self.config.system_prompt
         if self.config.project_memory:
             system_prompt += "\n\n# Project memory (CLAUDE.md / AGENTS.md)\n" + self.config.project_memory
+        from .hooks import HookRunner
+
+        hooks = HookRunner(self.keys.data.get("hooks") or self.config.hooks, self.config.workdir)
         self.agent = Agent(
             provider=build_provider(self.config),
             tools=registry,
@@ -259,6 +262,7 @@ class AgentService:
             max_steps=self.config.max_steps,
             stream=True,  # web chat streams token-by-token over SSE
             plan_mode=self.plan_mode,
+            hooks=hooks,
         )
         # carry the running summary across rebuilds, attach the active history
         self.agent.summary = self._summaries.get(self._active_conv, "")

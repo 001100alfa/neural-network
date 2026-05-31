@@ -52,7 +52,9 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _make_agent(config, ui: UI, no_mcp: bool):
+def _make_agent(config, ui: UI, no_mcp: bool, plan_mode: bool = False):
+    from .hooks import HookRunner
+
     provider = build_provider(config)
     registry = default_registry()
 
@@ -68,13 +70,18 @@ def _make_agent(config, ui: UI, no_mcp: bool):
         auto_approve=config.auto_approve,
         allow_outside_workdir=config.allow_outside_workdir,
     )
+    system_prompt = config.system_prompt
+    if config.project_memory:
+        system_prompt += "\n\n# Project memory (CLAUDE.md / AGENTS.md)\n" + config.project_memory
     agent = Agent(
         provider=provider,
         tools=registry,
         ctx=ctx,
         ui=ui,
-        system_prompt=config.system_prompt,
+        system_prompt=system_prompt,
         max_steps=config.max_steps,
+        plan_mode=plan_mode,
+        hooks=HookRunner(config.hooks, config.workdir),
     )
     return agent, mcp_servers
 
