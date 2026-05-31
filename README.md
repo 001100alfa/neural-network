@@ -53,7 +53,12 @@ Requires Python **3.11+**.
   system prompt; a 🧠 badge in the dashboard shows when memory is active.
 - **Context compaction** — long conversations are summarised automatically as
   they approach the context limit (recent turns kept verbatim) so sessions don't
-  overflow the model's context window.
+  overflow the model's context window. Token estimates use a real tokenizer
+  (`tiktoken` if installed, else an improved heuristic) and **self-calibrate**
+  against the provider's reported usage.
+- **Robust shell output** — `run_shell` streams through a bounded buffer (a
+  chatty command can't exhaust memory) and long output is **smart-truncated**
+  keeping the head and tail.
 - **Plan mode** — read-only planning: the agent may only inspect
   (read/grep/git status·diff) and must produce a plan without changing anything.
   Toggle **Plan** in the dashboard or run the CLI with `--plan`.
