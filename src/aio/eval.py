@@ -85,6 +85,20 @@ class Scorecard:
                 lines.append(f"        {r.error or r.detail}")
         return "\n".join(lines)
 
+    def to_dict(self) -> dict:
+        """Machine-readable scorecard (for committing benchmark results)."""
+        return {
+            "mode": "live" if self.live else "reference",
+            "passed": self.passed, "total": self.total,
+            "pass_rate": round(self.pass_rate, 4),
+            "cases": [
+                {"name": r.name, "passed": r.passed, "tools": r.tools,
+                 "tokens": r.tokens, "elapsed_s": round(r.elapsed_s, 3),
+                 "error": r.error}
+                for r in self.results
+            ],
+        }
+
 
 # -- runner -----------------------------------------------------------------
 
@@ -248,6 +262,25 @@ def golden_cases() -> list[EvalCase]:
                 return AssistantTurn(content="Done.", tool_calls=[])
         return P()
 
+    def two_bugs_ref():
+        class P:
+            def __init__(self): self.n = 0
+            def chat(self, messages, tools=None, system=None):
+                self.n += 1
+                if self.n == 1:
+                    return AssistantTurn(content="Fix mathutil.", tool_calls=[ToolCall(
+                        "1", "edit_file", {"path": "mathutil.py",
+                        "old_string": "return a - b", "new_string": "return a + b"})])
+                if self.n == 2:
+                    return AssistantTurn(content="Fix strutil.", tool_calls=[ToolCall(
+                        "2", "edit_file", {"path": "strutil.py",
+                        "old_string": "return s", "new_string": "return s.upper()"})])
+                if self.n == 3:
+                    return AssistantTurn(content="Verify.", tool_calls=[ToolCall(
+                        "3", "run_shell", {"command": "python3 -m pytest -q"})])
+                return AssistantTurn(content="Both fixed.", tool_calls=[])
+        return P()
+
     return [
         EvalCase(
             name="fix-divide-by-zero",
@@ -306,15 +339,38 @@ def golden_cases() -> list[EvalCase]:
             check=pytest_passes,
             reference=navigate_ref,
         ),
+        EvalCase(
+            name="fix-two-bugs-two-files",
+            prompt="Two functions are wrong (one per file). Fix both so all tests pass.",
+            files={
+                "mathutil.py": "def add(a, b):\n    return a - b\n",
+                "strutil.py": "def shout(s):\n    return s\n",
+                "test_both.py": "from mathutil import add\nfrom strutil import shout\n\n"
+                                "def test_add():\n    assert add(2, 3) == 5\n\n"
+                                "def test_shout():\n    assert shout('hi') == 'HI'\n",
+            },
+            check=pytest_passes,
+            reference=two_bugs_ref,
+        ),
     ]
 
 
 def main(argv: list[str] | None = None) -> int:
+    import argparse
+    import json as _json
+
+    ap = argparse.ArgumentParser(prog="aio-eval", description="Run the AIO eval suite.")
+    ap.add_argument("--json", metavar="PATH", help="Write the machine-readable scorecard here.")
+    args = ap.parse_args(argv)
+
     live = os.environ.get("AIO_EVAL_LIVE") == "1"
     cases = golden_cases()
     factory = live_agent_factory if live else reference_agent_factory
     card = run_suite(cases, factory, live=live)
     print(card.format())
+    if args.json:
+        Path(args.json).write_text(_json.dumps(card.to_dict(), indent=2), encoding="utf-8")
+        print(f"\nscorecard written to {args.json}")
     if not live:
         print("\nNOTE: live evaluation skipped. Set AIO_EVAL_LIVE=1 and a provider "
               "API key to measure a real model's reasoning.")
