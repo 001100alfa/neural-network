@@ -4,6 +4,29 @@ All notable changes to AIO are documented here. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.1.5] - 2026-05-31
+
+Deep investments on top of the two hardening waves. Test count 261 -> 312
+(+1 skipped); coverage 90%; mypy + a coverage gate in CI.
+
+### Added
+- **Reflection loop**: the agent self-verifies after answering and continues if
+  work remains (plan->execute->verify->continue), bounded by `--reflect N`.
+- **rename_symbol**: project-wide, whole-word, atomic + rewindable multi-file
+  refactor.
+- **OS sandbox** (`sandbox.py`): resource caps (CPU / file-size / core) on shell
+  tools, plus optional bwrap/firejail confinement.
+- **Eval**: machine-readable scorecard (`aio-eval --json`), a harder case, and
+  `BENCHMARKS.md` (the live number that backs any "Claude-Code-level" claim is
+  honestly marked unproven).
+- Git panel deepened (branches/switch/stash/show/pull/push); dashboard split
+  into ES modules (`util.js`/`editor.js`/`panels.js`) with a node:test + a
+  Playwright e2e; a header version/uptime readout.
+
+### Changed
+- CLI/TUI brought under test (cli.py 24->65%, ui.py 30->98%).
+- CI gains a Docker `/health` smoke job and an informational `pip-audit` job.
+
 ## [0.1.4] - 2026-05-31
 
 A second, deeper hardening wave. Test count grew 205 → 261 (+1 skipped), with a
