@@ -49,12 +49,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--plan", action="store_true", help="Plan mode: read-only; produce a plan, change nothing.")
     p.add_argument("-c", "--continue", dest="cont", action="store_true",
                    help="Resume the most recent CLI conversation.")
+    p.add_argument("--output-format", choices=["text", "json"], default="text",
+                   help="One-shot output format (json = headless, structured result).")
+    p.add_argument("--diff-approve", action="store_true",
+                   help="Approve file edits hunk-by-hunk (interactive).")
     p.add_argument("--list-tools", action="store_true", help="List tools and exit.")
     p.add_argument("--version", action="version", version=f"aio {__version__}")
     return p
 
 
-def _make_agent(config, ui: UI, no_mcp: bool, plan_mode: bool = False):
+def _make_agent(config, ui: UI, no_mcp: bool, plan_mode: bool = False, per_hunk: bool = False):
     from .hooks import HookRunner
 
     provider = build_provider(config)
@@ -72,6 +76,7 @@ def _make_agent(config, ui: UI, no_mcp: bool, plan_mode: bool = False):
         auto_approve=config.auto_approve,
         allow_outside_workdir=config.allow_outside_workdir,
         permissions=dict(config.permissions),
+        per_hunk=per_hunk,
     )
     system_prompt = config.system_prompt
     if config.project_memory:
@@ -211,7 +216,8 @@ def main(argv: list[str] | None = None) -> int:
         serve(config, host=args.host, port=args.port, open_browser=args.open)
         return 0
 
-    agent, mcp_servers = _make_agent(config, ui, no_mcp=args.no_mcp, plan_mode=args.plan)
+    agent, mcp_servers = _make_agent(config, ui, no_mcp=args.no_mcp, plan_mode=args.plan,
+                                     per_hunk=args.diff_approve)
 
     if args.cont:
         n = _load_cli_session(agent)
@@ -221,6 +227,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.prompt:
             prompt = " ".join(args.prompt)
+            if args.output_format == "json":
+                return _run_headless_json(agent, prompt)
             try:
                 agent.run(prompt)
             except ProviderError as exc:
@@ -234,6 +242,33 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         for server in mcp_servers:
             server.stop()
+
+
+def _run_headless_json(agent, prompt: str) -> int:
+    """One-shot run that prints a single structured JSON result (headless mode)."""
+    import json
+
+    from .web import EventUI
+
+    ui = EventUI()          # records events instead of printing
+    agent.ui = ui
+    agent.ctx.ui = ui
+    agent.stream = False
+    error = None
+    try:
+        final = agent.run(prompt)
+    except ProviderError as exc:
+        final, error = "", str(exc)
+    _save_cli_session(agent)
+    result = {
+        "ok": error is None,
+        "result": final,
+        "error": error,
+        "usage": agent.run_usage,
+        "events": ui.events,
+    }
+    print(json.dumps(result, indent=2))
+    return 0 if error is None else 1
 
 
 def _cli_session_path() -> "Path":

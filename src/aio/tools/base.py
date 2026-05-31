@@ -39,6 +39,8 @@ class ToolContext:
     depth: int = 0
     # background processes started by run_background (#4): id -> dict
     background: dict = field(default_factory=dict)
+    # when True, edits are approved hunk-by-hunk via ui.confirm_hunk (#9)
+    per_hunk: bool = False
 
     def snapshot(self, path: "Path", label: str) -> None:
         """Record the pre-edit contents of ``path`` so the change can be undone."""
