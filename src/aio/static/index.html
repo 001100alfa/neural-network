@@ -162,9 +162,20 @@
         <button data-git="diff_staged">staged</button>
         <button data-git="log">log</button>
         <button data-git="add">add -A</button>
+        <button data-git="branches">branches</button>
+        <button data-git="show">show</button>
+        <button data-git="stash">stash</button>
+        <button data-git="stash_pop">stash pop</button>
+        <button data-git="pull">pull</button>
+        <button data-git="push">push</button>
       </div>
       <div class="console diff" id="gitOut">git output…
 </div>
+      <div class="row">
+        <input id="gitBranch" placeholder="branch name"/>
+        <button id="gitSwitch">Switch</button>
+        <button id="gitNewBranch">New branch</button>
+      </div>
       <div class="row">
         <input id="gitMsg" placeholder="commit message"/>
         <button id="gitCommit">Commit</button>

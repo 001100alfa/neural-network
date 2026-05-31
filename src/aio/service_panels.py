@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import re
 import shutil
 import subprocess
 import threading
@@ -48,17 +49,32 @@ class PanelsMixin(ServiceBase):
             return "git is not installed or not on PATH."
         return ((proc.stdout or "") + (proc.stderr or "")).strip() or "(no output)"
 
-    def git_action(self, action: str, message: str = "", pathspec: str = "-A") -> dict[str, Any]:
+    def git_action(self, action: str, message: str = "", pathspec: str = "-A",
+                   name: str = "") -> dict[str, Any]:
+        # Read-only / fixed-argv presets.
         presets = {
             "status": ["status", "--short", "--branch"],
             "diff": ["diff"],
             "diff_staged": ["diff", "--staged"],
             "log": ["log", "--oneline", "-15"],
             "add": ["add", pathspec or "-A"],
+            "branches": ["branch", "-vv", "--all"],
+            "show": ["show", "--stat", "HEAD"],
+            "push": ["push"],
+            "pull": ["pull", "--ff-only"],
+            "stash": ["stash"],
+            "stash_pop": ["stash", "pop"],
         }
         if action == "commit":
             self._run_git(["add", pathspec or "-A"])
             return {"output": self._run_git(["commit", "-m", message or "update"])}
+        # Actions that take a branch name (validated to a safe ref shape).
+        if action in ("switch", "new_branch"):
+            ref = (name or "").strip()
+            if not re.fullmatch(r"[A-Za-z0-9._/-]{1,200}", ref):
+                return {"output": "invalid branch name"}
+            argv = ["checkout", "-b", ref] if action == "new_branch" else ["checkout", ref]
+            return {"output": self._run_git(argv)}
         if action not in presets:
             return {"output": f"unknown git action: {action}"}
         return {"output": self._run_git(presets[action])}

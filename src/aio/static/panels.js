@@ -44,6 +44,13 @@ document.getElementById('gitCommit').onclick=()=>{
   if(!message){renderGit('enter a commit message first.');return;}
   git('commit',{message}).then(()=>{document.getElementById('gitMsg').value='';});
 };
+function gitBranchOp(action){
+  const name=document.getElementById('gitBranch').value.trim();
+  if(!name){renderGit('enter a branch name first.');return;}
+  git(action,{name});
+}
+document.getElementById('gitSwitch').onclick=()=>gitBranchOp('switch');
+document.getElementById('gitNewBranch').onclick=()=>gitBranchOp('new_branch');
 
 // ---- Web server ----
 const srvOut=document.getElementById('srvOut');
