@@ -179,6 +179,33 @@ DEFAULT_MCP_SERVERS: list[dict[str, Any]] = [
 ]
 
 
+def _extract_doc_text(name: str, data: bytes) -> str:
+    """Best-effort text extraction from an attached document (text or PDF)."""
+    lower = name.lower()
+    if lower.endswith(".pdf") or data[:5] == b"%PDF-":
+        # Minimal PDF text: pull text from BT...ET / Tj / TJ operators in
+        # uncompressed streams. Good enough for simple PDFs; no dependencies.
+        import re
+
+        try:
+            blob = data.decode("latin-1", "replace")
+        except Exception:  # pragma: no cover
+            return ""
+        chunks = re.findall(r"\((?:\\.|[^()\\])*\)", blob)
+        out = []
+        for c in chunks:
+            s = c[1:-1].replace("\\(", "(").replace("\\)", ")").replace("\\\\", "\\")
+            if s.strip():
+                out.append(s)
+        text = " ".join(out)
+        return text if text.strip() else "(PDF had no extractable plain text)"
+    # treat everything else as text
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data.decode("utf-8", "replace")
+
+
 def _msg_to_dict(m: Message) -> dict[str, Any]:
     return {
         "role": m.role,
@@ -249,7 +276,9 @@ class AgentService:
         registry = default_registry()
         for tool in self._mcp_tools:
             registry.register(tool)
-        system_prompt = self.config.system_prompt
+        from .config import OUTPUT_STYLES
+
+        system_prompt = self.config.system_prompt + OUTPUT_STYLES.get(self.config.output_style, "")
         if self.config.project_memory:
             system_prompt += "\n\n# Project memory (CLAUDE.md / AGENTS.md)\n" + self.config.project_memory
         from .hooks import HookRunner
@@ -319,6 +348,7 @@ class AgentService:
             "summary": bool(self._summaries.get(self._active_conv)),
             "thinking_tokens": self.config.active.thinking_tokens,
             "cache": self.config.active.cache,
+            "output_style": self.config.output_style,
         }
 
     def set_plan_mode(self, on: bool) -> dict[str, Any]:
@@ -333,6 +363,15 @@ class AgentService:
             self.config.active.thinking_tokens = max(0, int(tokens or 0))
             self._build_agent()
             return {"thinking_tokens": self.config.active.thinking_tokens}
+
+    def set_output_style(self, style: str) -> dict[str, Any]:
+        from .config import OUTPUT_STYLES
+
+        with self._lock:
+            if style in OUTPUT_STYLES:
+                self.config.output_style = style
+                self._build_agent()
+            return {"output_style": self.config.output_style, "styles": list(OUTPUT_STYLES)}
 
     # -- checkpoints / rewind (#4) and todos (#7) ------------------------
     def checkpoints_info(self) -> dict[str, Any]:
@@ -399,10 +438,27 @@ class AgentService:
 
         return {"commands": sorted(_lc(self.config.workdir).keys())}
 
-    def chat(self, message: str, images=None, conv_id: str = "default") -> dict[str, Any]:
+    @staticmethod
+    def _inline_files(message: str, files) -> str:
+        """Append decoded text of attached non-image documents (#10)."""
+        import base64
+
+        blocks = []
+        for f in files or []:
+            name = f.get("name", "attachment")
+            try:
+                data = base64.b64decode(f.get("data", ""))
+            except Exception:
+                continue
+            text = _extract_doc_text(name, data)
+            if text:
+                blocks.append(f"\n\n--- attached file: {name} ---\n{text[:100_000]}")
+        return message + "".join(blocks)
+
+    def chat(self, message: str, images=None, conv_id: str = "default", files=None) -> dict[str, Any]:
         with self._lock:
             self._select_conv(conv_id)
-            message = self._preprocess(message)
+            message = self._inline_files(self._preprocess(message), files)
             self.ui.drain()
             try:
                 final = self.agent.run(message, images=images)
@@ -414,7 +470,7 @@ class AgentService:
             self._accumulate_usage()
             return {"events": self.ui.drain(), "final": final, "usage": self.usage_info()}
 
-    def chat_stream(self, message: str, emit, images=None, conv_id: str = "default") -> None:
+    def chat_stream(self, message: str, emit, images=None, conv_id: str = "default", files=None) -> None:
         """Run a turn, delivering each event to ``emit`` as it happens.
 
         ``emit`` receives every agent/tool event live and a final
@@ -422,7 +478,7 @@ class AgentService:
         """
         with self._lock:
             self._select_conv(conv_id)
-            message = self._preprocess(message)
+            message = self._inline_files(self._preprocess(message), files)
             self.ui.drain()
             self.ui.sink = emit
             try:
@@ -981,6 +1037,7 @@ def _make_handler(service: AgentService):
                            "conv": (qs.get("conv") or ["default"])[0]}
             message = payload.get("message", "")
             images = payload.get("images") or []
+            files = payload.get("files") or []
             conv = payload.get("conv", "default")
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -993,7 +1050,7 @@ def _make_handler(service: AgentService):
                 self.wfile.flush()
 
             try:
-                service.chat_stream(message, emit, images=images, conv_id=conv)
+                service.chat_stream(message, emit, images=images, conv_id=conv, files=files)
             except (BrokenPipeError, ConnectionResetError):  # pragma: no cover
                 pass
 
@@ -1006,7 +1063,8 @@ def _make_handler(service: AgentService):
                 if self.path == "/api/chat":
                     self._json(200, service.chat(
                         payload.get("message", ""),
-                        images=payload.get("images"), conv_id=payload.get("conv", "default")))
+                        images=payload.get("images"), conv_id=payload.get("conv", "default"),
+                        files=payload.get("files")))
                 elif self.path == "/api/reset":
                     self._json(200, service.reset(payload.get("conv", "default")))
                 elif self.path == "/api/conversation/close":
@@ -1033,6 +1091,8 @@ def _make_handler(service: AgentService):
                     self._json(200, service.rewind(payload.get("id")))
                 elif self.path == "/api/thinking":
                     self._json(200, service.set_thinking(payload.get("tokens", 0)))
+                elif self.path == "/api/style":
+                    self._json(200, service.set_output_style(payload.get("style", "default")))
                 elif self.path == "/api/providers":
                     self._json(200, service.set_provider_key(
                         payload.get("provider", ""),
@@ -1334,6 +1394,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <div class="srow"><span>Font size</span>
       <span><button id="fzMinus">−</button> <span id="fzVal">14</span>px <button id="fzPlus">+</button></span>
     </div>
+    <div class="srow"><span>Output style</span>
+      <select id="styleSel">
+        <option value="default">default</option><option value="concise">concise</option>
+        <option value="explanatory">explanatory</option><option value="teacher">teacher</option>
+      </select>
+    </div>
   </div>
 </header>
 <div class="layout">
@@ -1349,7 +1415,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <div id="log"></div>
     <div id="attachBar" class="attachbar"></div>
     <footer>
-      <input id="fileInput" type="file" accept="image/*" multiple style="display:none"/>
+      <input id="fileInput" type="file" multiple style="display:none"/>
       <button id="attachBtn" title="attach image(s)">📎</button>
       <textarea id="input" placeholder="Ask the agent to do something… (Enter to send, Shift+Enter for newline)"></textarea>
       <button id="send">Send</button>
@@ -1543,6 +1609,7 @@ async function loadInfo(){
   document.getElementById('memBadge').classList.toggle('on', !!d.memory);
   document.getElementById('planBtn').classList.toggle('on', !!d.plan_mode);
   document.getElementById('thinkBtn').classList.toggle('on', (d.thinking_tokens||0)>0);
+  if(d.output_style){ const ss=document.getElementById('styleSel'); if(ss) ss.value=d.output_style; }
 }
 document.getElementById('thinkBtn').onclick=async()=>{
   const on=document.getElementById('thinkBtn').classList.contains('on');
@@ -1597,19 +1664,27 @@ async function closeConv(id){
 }
 
 // ---- image attachments (multimodal) ----
-let pending=[];
+let pending=[];        // images (sent as vision content)
+let pendingFiles=[];   // non-image documents (inlined as text)
 function renderAttachments(){
   const bar=document.getElementById('attachBar'); bar.innerHTML='';
   pending.forEach((p,i)=>{ const th=el('thumb'); const im=document.createElement('img');
     im.src='data:'+p.media_type+';base64,'+p.data; th.appendChild(im);
     const x=document.createElement('span'); x.className='x'; x.textContent='×';
     x.onclick=()=>{pending.splice(i,1);renderAttachments();}; th.appendChild(x); bar.appendChild(th); });
+  pendingFiles.forEach((p,i)=>{ const th=el('thumb'); th.style.fontSize='10px'; th.style.padding='3px';
+    th.textContent='📄 '+(p.name||'file');
+    const x=document.createElement('span'); x.className='x'; x.textContent='×';
+    x.onclick=()=>{pendingFiles.splice(i,1);renderAttachments();}; th.appendChild(x); bar.appendChild(th); });
 }
 function addFiles(files){
-  [...files].forEach(f=>{ if(f.type && f.type.indexOf('image/')!==0) return;
+  [...files].forEach(f=>{
     const r=new FileReader();
+    const isImg = f.type && f.type.indexOf('image/')===0;
     r.onload=()=>{ const b64=String(r.result).split(',')[1]||'';
-      pending.push({media_type:f.type||'image/png',data:b64,name:f.name||'pasted'}); renderAttachments(); };
+      if(isImg) pending.push({media_type:f.type||'image/png',data:b64,name:f.name||'pasted'});
+      else pendingFiles.push({name:f.name||'file',data:b64});
+      renderAttachments(); };
     r.readAsDataURL(f); });
 }
 document.getElementById('attachBtn').onclick=()=>document.getElementById('fileInput').click();
@@ -1663,18 +1738,23 @@ async function runSlash(text){
 }
 
 async function sendMsg(){
-  const text=input.value.trim(); if(!text && pending.length===0) return;
-  if(text.startsWith('/') && pending.length===0){ input.value=''; await runSlash(text); input.focus(); return; }
+  const text=input.value.trim();
+  const hasAtt = pending.length>0 || pendingFiles.length>0;
+  if(!text && !hasAtt) return;
+  if(text.startsWith('/') && !hasAtt){ input.value=''; await runSlash(text); input.focus(); return; }
   input.value=''; await sendMsgText(text);
 }
 async function sendMsgText(text){
   const imgs=pending.map(p=>({media_type:p.media_type,data:p.data}));
-  addUserMsg(text, pending); pending=[]; renderAttachments();
+  const docs=pendingFiles.map(p=>({name:p.name,data:p.data}));
+  const labelImgs=pending.slice(); const labelDocs=pendingFiles.map(p=>p.name);
+  addUserMsg(text + (labelDocs.length?('\n📄 '+labelDocs.join(', ')):''), labelImgs);
+  pending=[]; pendingFiles=[]; renderAttachments();
   send.disabled=true; const think=addThinking();
   let sawDiff=false, gotFirst=false;
   try{
     const resp=await fetch('/api/chat/stream',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({message:text, images:imgs, conv:activeConv})});
+      body:JSON.stringify({message:text, images:imgs, files:docs, conv:activeConv})});
     const reader=resp.body.getReader(); const dec=new TextDecoder(); let buf='';
     for(;;){
       const {value,done}=await reader.read(); if(done) break;
@@ -1792,6 +1872,10 @@ function applySettings(){
 function saveSettings(s){ localStorage.setItem('aio_settings', JSON.stringify(s)); applySettings(); }
 document.getElementById('gearBtn').onclick=()=>document.getElementById('settingsPanel').classList.toggle('on');
 document.getElementById('themeSel').onchange=(e)=>{ const s=getSettings(); s.theme=e.target.value; saveSettings(s); };
+document.getElementById('styleSel').onchange=async(e)=>{
+  await fetch('/api/style',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({style:e.target.value})});
+};
 document.getElementById('fzMinus').onclick=()=>{ const s=getSettings(); s.font=Math.max(11,(s.font||14)-1); saveSettings(s); };
 document.getElementById('fzPlus').onclick=()=>{ const s=getSettings(); s.font=Math.min(22,(s.font||14)+1); saveSettings(s); };
 applySettings();
