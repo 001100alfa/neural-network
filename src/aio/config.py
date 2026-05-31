@@ -6,215 +6,37 @@ Precedence (highest wins):
     3. project config (./.aio.toml)
     4. user config (~/.config/aio/config.toml)
     5. built-in defaults
+
+The static data (provider catalog, system prompt, styles, context windows), the
+config dataclasses and the API-key store live in their own modules
+(:mod:`aio.defaults`, :mod:`aio.models`, :mod:`aio.keystore`); they are
+re-exported here so existing imports keep working.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import tomllib
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-# Built-in per-provider defaults. ``env`` is the environment variable that
-# supplies the API key when one is not given in a config file or the key store.
-# All providers except "anthropic" speak the OpenAI-compatible chat API.
-PROVIDER_DEFAULTS: dict[str, dict[str, Any]] = {
-    "anthropic": {
-        "label": "Anthropic (Claude)",
-        "model": "claude-sonnet-4-6",
-        "base_url": "https://api.anthropic.com",
-        "env": "ANTHROPIC_API_KEY",
-    },
-    "openai": {
-        "label": "OpenAI (GPT)",
-        "model": "gpt-4o",
-        "base_url": "https://api.openai.com/v1",
-        "env": "OPENAI_API_KEY",
-    },
-    "google": {
-        "label": "Google Gemini",
-        "model": "gemini-2.0-flash",
-        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-        "env": "GEMINI_API_KEY",
-    },
-    "groq": {
-        "label": "Groq",
-        "model": "llama-3.3-70b-versatile",
-        "base_url": "https://api.groq.com/openai/v1",
-        "env": "GROQ_API_KEY",
-    },
-    "mistral": {
-        "label": "Mistral AI",
-        "model": "mistral-large-latest",
-        "base_url": "https://api.mistral.ai/v1",
-        "env": "MISTRAL_API_KEY",
-    },
-    "deepseek": {
-        "label": "DeepSeek",
-        "model": "deepseek-chat",
-        "base_url": "https://api.deepseek.com/v1",
-        "env": "DEEPSEEK_API_KEY",
-    },
-    "xai": {
-        "label": "xAI (Grok)",
-        "model": "grok-2-latest",
-        "base_url": "https://api.x.ai/v1",
-        "env": "XAI_API_KEY",
-    },
-    "together": {
-        "label": "Together AI",
-        "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-        "base_url": "https://api.together.xyz/v1",
-        "env": "TOGETHER_API_KEY",
-    },
-    "openrouter": {
-        "label": "OpenRouter",
-        "model": "anthropic/claude-sonnet-4-6",
-        "base_url": "https://openrouter.ai/api/v1",
-        "env": "OPENROUTER_API_KEY",
-    },
-    "ollama": {
-        "label": "Ollama (local)",
-        "model": "qwen2.5-coder",
-        "base_url": "http://localhost:11434/v1",
-        "env": None,  # local, no key required
-    },
-}
-
-# Order used when auto-detecting which provider to use from available API keys.
-AUTODETECT_ORDER = (
-    "anthropic", "openai", "google", "groq", "mistral",
-    "deepseek", "xai", "together", "openrouter",
+from .defaults import (
+    AUTODETECT_ORDER,
+    DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_SYSTEM_PROMPT,
+    OUTPUT_STYLES,
+    PROVIDER_DEFAULTS,
+    context_window_for,
 )
+from .keystore import KeyStore, keys_file_path
+from .models import Config, ProviderConfig
 
-DEFAULT_SYSTEM_PROMPT = """\
-You are AIO, an all-in-one open-source terminal coding agent operating inside a \
-user's project directory. You help with software engineering tasks: reading and \
-understanding code, implementing features, fixing bugs, running tests, and using git.
-
-You have tools to read, write, and edit files; navigate by symbol; search by \
-filename and content; run shell commands; and use git. Guidelines:
-- Orient first: use the project map, search_code (keyword/concept search) and \
-  find_symbol to locate definitions, and read_file (optionally with a symbol=) \
-  before editing. Make focused, minimal changes.
-- For non-trivial multi-step work, keep a plan with write_todos and update it as \
-  you go; delegate independent sub-tasks with task / parallel_tasks.
-- Prefer multi_edit for several changes to one file (atomic); use rename_symbol \
-  for a project-wide identifier rename instead of many edits.
-- For file management use the dedicated tools (make_dir, move_path, copy_path, \
-  delete_path, archive) — they are platform-independent and safer than shell \
-  mv/rm/cp; move/delete of a single file is rewindable.
-- To PROVE a web UI works, run it (run_shell/run_background) then capture a \
-  screenshot of its URL to give the user visual evidence — verify by tests AND \
-  a screenshot when a change is visual.
-- edit_file matches old_string EXACTLY, including whitespace. If an edit fails, \
-  re-read the file and copy the exact text (the error often points at the cause, \
-  e.g. an indentation difference) — do not guess the same string twice.
-- ALWAYS verify your work: after editing, run the project's tests/linter/build \
-  via run_shell and fix what you broke before finishing. If a tool call fails, \
-  read the error, adjust, and retry rather than giving up or guessing.
-- Be concise. Explain what you are about to do, then do it.
-- Never run destructive commands without a clear reason; the user must approve \
-  mutating actions.
-- When the task is complete, give a short summary of what changed and how you \
-  verified it.
-"""
-
-# Named output styles (#7): appended to the system prompt to shape responses.
-OUTPUT_STYLES: dict[str, str] = {
-    "default": "",
-    "concise": "\n\n# Output style: concise\nBe terse. Prefer the shortest correct "
-               "answer; minimal prose, no preamble or recap.",
-    "explanatory": "\n\n# Output style: explanatory\nExplain your reasoning and the "
-                   "trade-offs as you work, so the user learns from the change.",
-    "teacher": "\n\n# Output style: teacher\nTeach as you go: define key concepts, note "
-               "why each step matters, and suggest what to learn next.",
-}
-
-
-@dataclass
-class ProviderConfig:
-    model: str
-    api_key: str | None = None
-    base_url: str | None = None
-    max_tokens: int = 4096
-    extra: dict[str, Any] = field(default_factory=dict)
-    cache: bool = True            # provider prompt caching
-    thinking_tokens: int = 0      # extended-thinking budget, 0 = off
-    max_retries: int = 3          # transient-error retries with backoff
-
-
-@dataclass
-class Config:
-    provider: str
-    providers: dict[str, ProviderConfig]
-    workdir: Path
-    auto_approve: bool = False
-    allow_outside_workdir: bool = False
-    max_steps: int = 50
-    system_prompt: str = DEFAULT_SYSTEM_PROMPT
-    mcp_servers: list[dict[str, Any]] = field(default_factory=list)
-    #: project/instruction memory loaded from CLAUDE.md / AGENTS.md / .aio.md
-    project_memory: str = ""
-    #: compact codebase overview (tree/langs/key files) for agent priming (#J)
-    project_map: str = ""
-    #: PreToolUse/PostToolUse hooks (#6)
-    hooks: list[dict[str, Any]] = field(default_factory=list)
-    #: granular tool permissions: tool name -> allow|deny|ask
-    permissions: dict[str, str] = field(default_factory=dict)
-    #: named output style: default|concise|explanatory|teacher
-    output_style: str = "default"
-    #: OpenTelemetry-style telemetry settings (#8)
-    telemetry: dict[str, Any] = field(default_factory=dict)
-    #: auto-retrieve relevant code (BM25) and inject it into context each turn
-    auto_context: bool = True
-    auto_context_results: int = 5
-    #: self-verify and continue up to N times after an answer (0 = off)
-    max_reflections: int = 0
-    #: usable context window in tokens; 0 = auto-detect from the model name
-    context_window: int = 0
-    #: unified permission mode: plan | default | accept_edits | admin
-    permission_mode: str = "default"
-
-    @property
-    def active(self) -> ProviderConfig:
-        return self.providers[self.provider]
-
-    @property
-    def effective_context_window(self) -> int:
-        """Tokens of history to keep before compacting — explicit, or per-model."""
-        return self.context_window or context_window_for(self.active.model)
-
-
-# Known usable context windows (tokens) by model-name substring, longest match
-# wins. These are the API context limits; the agent compacts at ~80% of this.
-_CONTEXT_WINDOWS: list[tuple[str, int]] = [
-    ("claude-sonnet-4", 1_000_000),   # 1M-token tier
-    ("claude-opus-4", 200_000),
-    ("claude-3-5", 200_000),
-    ("claude-3", 200_000),
-    ("claude", 200_000),
-    ("gpt-4.1", 1_000_000),
-    ("gpt-4o", 128_000),
-    ("o1", 200_000), ("o3", 200_000),
-    ("gpt-4", 128_000),
-    ("gemini-1.5", 1_000_000), ("gemini", 1_000_000),
-    ("qwen", 128_000), ("deepseek", 128_000), ("llama", 128_000),
-    ("mistral", 128_000), ("mixtral", 64_000),
+__all__ = [
+    "PROVIDER_DEFAULTS", "AUTODETECT_ORDER", "DEFAULT_SYSTEM_PROMPT", "OUTPUT_STYLES",
+    "DEFAULT_CONTEXT_WINDOW", "context_window_for",
+    "Config", "ProviderConfig", "KeyStore", "keys_file_path",
+    "load_config", "load_project_memory",
 ]
-DEFAULT_CONTEXT_WINDOW = 128_000
-
-
-def context_window_for(model: str) -> int:
-    """Best-effort usable context window (tokens) for a model name."""
-    m = (model or "").lower()
-    best = (0, DEFAULT_CONTEXT_WINDOW)
-    for key, window in _CONTEXT_WINDOWS:
-        if key in m and len(key) > best[0]:
-            best = (len(key), window)
-    return best[1]
 
 
 def _read_toml(path: Path) -> dict[str, Any]:
@@ -354,119 +176,3 @@ def load_project_memory(workdir: Path) -> str:
         except OSError:
             pass
     return "\n\n".join(parts)
-
-
-def keys_file_path() -> Path:
-    """Where API keys entered via the dashboard are persisted (JSON)."""
-    env = os.environ.get("AIO_KEYS_FILE")
-    if env:
-        return Path(env)
-    return Path.home() / ".config" / "aio" / "keys.json"
-
-
-@dataclass
-class KeyStore:
-    """Local, persistent store of provider API keys / model / base_url.
-
-    Stored as plain JSON (chmod 600) — comparable to other CLI tools. Intended
-    for local/trusted use; the file is git-ignored.
-    """
-
-    path: Path
-    data: dict[str, Any] = field(default_factory=lambda: {"providers": {}, "active": None})
-
-    @classmethod
-    def load(cls, path: Path | str | None = None) -> "KeyStore":
-        p = Path(path) if path else keys_file_path()
-        data: dict[str, Any] = {"providers": {}, "active": None}
-        if p.is_file():
-            try:
-                loaded = json.loads(p.read_text("utf-8"))
-                if isinstance(loaded, dict):
-                    data.update(loaded)
-            except (json.JSONDecodeError, OSError):
-                pass
-        data.setdefault("providers", {})
-        data.setdefault("active", None)
-        return cls(path=p, data=data)
-
-    def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
-        try:
-            os.chmod(self.path, 0o600)
-        except OSError:  # pragma: no cover - e.g. some Windows setups
-            pass
-
-    def get(self, name: str) -> dict[str, Any]:
-        return self.data["providers"].get(name, {})
-
-    def set(
-        self,
-        name: str,
-        *,
-        api_key: str | None = None,
-        model: str | None = None,
-        base_url: str | None = None,
-    ) -> None:
-        entry = self.data["providers"].setdefault(name, {})
-        if api_key is not None:
-            if api_key == "":
-                entry.pop("api_key", None)
-            else:
-                entry["api_key"] = api_key
-        if model:
-            entry["model"] = model
-        if base_url:
-            entry["base_url"] = base_url
-        self.save()
-
-    def set_active(self, name: str) -> None:
-        self.data["active"] = name
-        self.save()
-
-    # -- per-provider monthly budget + spend ------------------------------
-    def set_budget(self, name: str, budget_usd: float) -> None:
-        entry = self.data["providers"].setdefault(name, {})
-        entry["budget_usd"] = round(float(budget_usd or 0.0), 4)
-        self.save()
-
-    def get_budget(self, name: str) -> float:
-        try:
-            return float(self.data["providers"].get(name, {}).get("budget_usd", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            return 0.0
-
-    def monthly(self, name: str, month: str) -> dict[str, Any]:
-        m = self.data.get("usage", {}).get(name)
-        if not m or m.get("month") != month:
-            return {"month": month, "spent_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "requests": 0}
-        return m
-
-    def record_spend(
-        self, name: str, month: str, cost: float, input_tokens: int, output_tokens: int, requests: int
-    ) -> None:
-        usage = self.data.setdefault("usage", {})
-        m = usage.get(name)
-        if not m or m.get("month") != month:  # new month -> reset the counter
-            m = {"month": month, "spent_usd": 0.0, "input_tokens": 0, "output_tokens": 0, "requests": 0}
-        m["spent_usd"] = round(m["spent_usd"] + cost, 6)
-        m["input_tokens"] += input_tokens
-        m["output_tokens"] += output_tokens
-        m["requests"] += requests
-        usage[name] = m
-        self.save()
-
-    def apply_to(self, config: "Config") -> None:
-        """Overlay stored keys/models/base_urls (and active provider) onto config."""
-        for name, pc in config.providers.items():
-            stored = self.data["providers"].get(name, {})
-            if stored.get("api_key"):
-                pc.api_key = stored["api_key"]
-            if stored.get("model"):
-                pc.model = stored["model"]
-            if stored.get("base_url"):
-                pc.base_url = stored["base_url"]
-        active = self.data.get("active")
-        if active in config.providers:
-            config.provider = active
