@@ -1,3 +1,10 @@
+// Security hygiene: the startup URL carries a one-time ?token=. The server has
+// already pinned it as a SameSite cookie by the time this runs, so strip it
+// from the address bar/history (keeps it out of screenshots and back/forward).
+if (location.search.includes('token=')) {
+  try { history.replaceState(null, '', location.pathname); } catch (e) {}
+}
+
 const log = document.getElementById('log');
 const input = document.getElementById('input');
 const send = document.getElementById('send');

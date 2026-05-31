@@ -1,9 +1,15 @@
 """A zero-dependency web server for the AIO dashboard.
 
 Serves the single-page dashboard (see :mod:`aio.web_ui`) and a small JSON API
-on top of :class:`aio.service.AgentService`. Built entirely on the Python
-standard library (``http.server``). Tool approvals are auto-granted in web mode
-(there is no interactive terminal), so it is intended for local/trusted use.
+on top of :class:`aio.service.AgentService`, built entirely on the Python
+standard library (``http.server``).
+
+Because tool approvals are auto-granted in web mode (there is no interactive
+terminal), the server is protected by :class:`aio.security.WebGuard`: a
+per-session access token (handed off via the startup URL and pinned as a
+SameSite cookie), a loopback Host allow-list against DNS-rebinding, a request
+body-size cap and per-IP rate limiting. Auth can be disabled explicitly
+(``require_auth=False`` / ``--web-no-auth``) for trusted isolated hosts.
 
 :class:`EventUI` and :class:`AgentService` are re-exported here for backwards
 compatibility (``from aio.web import AgentService, EventUI``).
@@ -17,6 +23,7 @@ from typing import Any
 
 from .config import Config
 from .providers import ProviderError
+from .security import WebGuard, loopback_allowlist, new_token
 from .service import AgentService, EventUI, _extract_doc_text
 from .web_ui import static_asset
 
@@ -25,15 +32,46 @@ from .web_ui import static_asset
 __all__ = ["AgentService", "EventUI", "_extract_doc_text", "serve"]
 
 
-def _make_handler(service: AgentService):
+def _make_handler(service: AgentService, guard: "WebGuard | None" = None):
+    # No guard supplied -> a fully permissive one (auth/host/rate checks off).
+    active_guard = guard or WebGuard(token=None, allowed_hosts=None)
+
     class Handler(BaseHTTPRequestHandler):
+        _cookie: str | None = None
+
         def log_message(self, *_a):  # silence default stderr logging
             pass
+
+        def _security_headers(self) -> None:
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            if self._cookie:
+                self.send_header("Set-Cookie", self._cookie)
+
+        def _preflight(self) -> bool:
+            """Host / rate / token checks; writes the error response on failure."""
+            if not active_guard.host_ok(self.headers.get("Host")):
+                self._json(403, {"error": "forbidden: unexpected Host header"})
+                return False
+            client_ip = self.client_address[0] if self.client_address else "?"
+            if not active_guard.rate_ok(client_ip):
+                self._json(429, {"error": "rate limit exceeded; slow down"})
+                return False
+            token = active_guard.extract_token(self.headers, self.path)
+            if not active_guard.authorized(token):
+                self._json(401, {"error": "unauthorized: open the dashboard via the "
+                                          "URL printed at startup (it carries your token)"})
+                return False
+            # token arrived in the query string -> pin it as a cookie for next time
+            if active_guard.token is not None and active_guard.token_in_query(self.path):
+                self._cookie = active_guard.cookie_header()
+            return True
 
         def _send(self, code: int, body: bytes, content_type: str) -> None:
             self.send_response(code)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
+            self._security_headers()
             self.end_headers()
             self.wfile.write(body)
 
@@ -47,6 +85,8 @@ def _make_handler(service: AgentService):
             return json.loads(self.rfile.read(length).decode("utf-8"))
 
         def do_GET(self):  # noqa: N802
+            if not self._preflight():
+                return
             asset = static_asset(self.path.split("?")[0])
             if asset is not None:
                 body, content_type = asset
@@ -84,6 +124,7 @@ def _make_handler(service: AgentService):
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "keep-alive")
+            self._security_headers()
             self.end_headers()
 
             def emit(event):
@@ -96,6 +137,11 @@ def _make_handler(service: AgentService):
                 pass
 
         def do_POST(self):  # noqa: N802
+            if not self._preflight():
+                return
+            if active_guard.body_too_large(self.headers.get("Content-Length")):
+                self._json(413, {"error": "request body too large"})
+                return
             try:
                 payload = self._read_json()
                 if self.path == "/api/chat/stream":
@@ -194,14 +240,30 @@ def _make_handler(service: AgentService):
 
 
 def serve(
-    config: Config, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = False
+    config: Config, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = False,
+    token: str | None = None, require_auth: bool = True,
 ) -> None:
     service = AgentService(config)
-    httpd = ThreadingHTTPServer((host, port), _make_handler(service))
-    # When bound to 0.0.0.0, the browsable URL is localhost.
-    browse_host = "localhost" if host in ("0.0.0.0", "") else host
+    if not require_auth:
+        token = None
+    elif token is None:
+        token = new_token()
+    # Restrict the Host header to loopback unless explicitly bound to all
+    # interfaces (an explicit "expose me" choice); the token still guards it.
+    exposed = host in ("0.0.0.0", "::", "")
+    allowed = None if exposed else loopback_allowlist() | {host.lower()}
+    guard = WebGuard(token, allowed)
+    httpd = ThreadingHTTPServer((host, port), _make_handler(service, guard))
+
+    browse_host = "localhost" if exposed else host
     url = f"http://{browse_host}:{port}"
+    open_url = f"{url}/?token={token}" if token else url
     print(f"AIO web dashboard running at {url}")
+    if token:
+        print(f"open this URL (it carries your one-time access token):\n  {open_url}")
+    else:
+        print("WARNING: authentication is DISABLED (--web-no-auth). Anyone who can "
+              "reach this port can run shell and file tools.")
     print(f"provider={config.provider}  model={config.active.model}  workdir={config.workdir}")
     print("tool calls are auto-approved in web mode. Ctrl+C to stop.")
     if open_browser:
@@ -209,7 +271,7 @@ def serve(
         import webbrowser
 
         # Open shortly after the server starts listening.
-        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+        threading.Timer(0.8, lambda: webbrowser.open(open_url)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
