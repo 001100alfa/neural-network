@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aio-coding-agent"
-version = "0.1.5"
+version = "0.1.6"
 description = "All-in-one open-source terminal coding agent supporting Anthropic, OpenAI, OpenRouter, and local Ollama models."
 readme = "README.md"
 requires-python = ">=3.11"

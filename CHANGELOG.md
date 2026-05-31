@@ -4,6 +4,43 @@ All notable changes to AIO are documented here. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 semantic versioning.
 
+## [0.1.6] - 2026-05-31
+
+Capability + deployment wave toward Claude-Code-level autonomy, plus a clarity
+refactor. Test count 312 → 366; coverage 91%; mypy + coverage gate in CI. Still
+zero required runtime dependencies.
+
+### Added
+- **Permission modes** (`plan` / `default` / `accept_edits` / `admin`): one
+  unified setting for how tool calls are approved, including an elevated
+  **admin** mode. CLI `--permission-mode`, `AIO_PERMISSION_MODE`, and a
+  dashboard selector; explicit `permissions` rules and the catastrophic-command
+  guardrail still apply on top.
+- **File-management tools**: `make_dir`, `move_path`, `copy_path`, `delete_path`,
+  `archive` (zip/unzip) — platform-independent, workdir-confined, rewindable for
+  a single file; `unzip` guards against zip-slip.
+- **Screenshot tool**: capture a PNG of a running web page (visual proof);
+  Playwright is an optional `[proof]` extra.
+- **1M-token context**: the compaction threshold now follows the model's real
+  context window (`claude-sonnet-4`/`gpt-4.1`/`gemini-1.5` → 1M, etc.), with
+  `--context-window` / `AIO_CONTEXT_WINDOW` overrides.
+- **Edit-error recovery**: `edit_file` explains *why* a match failed (whitespace
+  / closest line) so the model self-corrects.
+- **Multi-file context**: the agent tracks its working set and keeps the files
+  "in play" in front of the model each turn.
+- **Reflection loop**: self-verify and continue after answering (`--reflect N`).
+- **Portable Linux container** (`run-docker.*`) and a **portable Unix toolchain
+  on Windows** (`setup-tools.*`, PortableGit) — Linux tools without Docker.
+- End-to-end capability proof test and a broadened eval golden suite
+  (`aio-eval --json`, `BENCHMARKS.md`).
+
+### Changed
+- **Search ranking**: a structural prior ranks implementation above tests/docs
+  (no embeddings needed); indexing is ~37% faster (per-line tokenization reused
+  across overlapping windows).
+- **Clarity refactor**: `config.py` (472 → 178 lines) split into `defaults.py`,
+  `keystore.py`, `models.py`; all imports re-exported.
+
 ## [0.1.5] - 2026-05-31
 
 Deep investments on top of the two hardening waves, plus Windows/Docker
