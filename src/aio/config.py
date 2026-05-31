@@ -103,6 +103,9 @@ filename and content; run shell commands; and use git. Guidelines:
   you go; delegate independent sub-tasks with task / parallel_tasks.
 - Prefer multi_edit for several changes to one file (atomic); use rename_symbol \
   for a project-wide identifier rename instead of many edits.
+- For file management use the dedicated tools (make_dir, move_path, copy_path, \
+  delete_path, archive) — they are platform-independent and safer than shell \
+  mv/rm/cp; move/delete of a single file is rewindable.
 - edit_file matches old_string EXACTLY, including whitespace. If an edit fails, \
   re-read the file and copy the exact text (the error often points at the cause, \
   e.g. an indentation difference) — do not guess the same string twice.
