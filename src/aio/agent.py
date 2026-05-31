@@ -86,8 +86,8 @@ class Agent:
         )
         result = child.run(prompt)
         # roll the sub-agent's token usage into the parent's tally
-        for k in ("requests", "input_tokens", "output_tokens"):
-            self.run_usage[k] += child.run_usage.get(k, 0)
+        for k in ("requests", "input_tokens", "output_tokens", "cache_read", "cache_write"):
+            self.run_usage[k] = self.run_usage.get(k, 0) + child.run_usage.get(k, 0)
         return result or "(sub-agent finished with no summary)"
 
     def reset(self) -> None:
@@ -179,7 +179,8 @@ class Agent:
         """Run one user turn to completion; returns the final assistant text."""
 
         self.messages.append(Message(role="user", content=user_input, images=images or []))
-        self.run_usage = {"requests": 0, "input_tokens": 0, "output_tokens": 0}
+        self.run_usage = {"requests": 0, "input_tokens": 0, "output_tokens": 0,
+                          "cache_read": 0, "cache_write": 0}
         self._maybe_compact()
         final_text = ""
 
@@ -202,6 +203,9 @@ class Agent:
             self.run_usage["requests"] += 1
             self.run_usage["input_tokens"] += inp
             self.run_usage["output_tokens"] += out
+            u = turn.usage or {}
+            self.run_usage["cache_read"] += int(u.get("cache_read_input_tokens", 0) or 0)
+            self.run_usage["cache_write"] += int(u.get("cache_creation_input_tokens", 0) or 0)
             self.messages.append(
                 Message(role="assistant", content=turn.content, tool_calls=turn.tool_calls)
             )

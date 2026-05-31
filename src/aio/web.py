@@ -216,6 +216,7 @@ class AgentService:
         # cumulative token usage / cost estimate for this session
         self.usage: dict[str, Any] = {
             "requests": 0, "input_tokens": 0, "output_tokens": 0,
+            "cache_read": 0, "cache_write": 0,
             "est_cost_usd": 0.0, "cost_known": True, "by_provider": {},
         }
         # multiple concurrent conversations (tabs): id -> message history
@@ -448,6 +449,8 @@ class AgentService:
         self.usage["requests"] += reqs
         self.usage["input_tokens"] += inp
         self.usage["output_tokens"] += out
+        self.usage["cache_read"] = self.usage.get("cache_read", 0) + ru.get("cache_read", 0)
+        self.usage["cache_write"] = self.usage.get("cache_write", 0) + ru.get("cache_write", 0)
         self.usage["est_cost_usd"] = round(self.usage["est_cost_usd"] + cost, 6)
         if not known and (inp or out):
             self.usage["cost_known"] = False
@@ -2185,6 +2188,9 @@ function renderUsage(u){
   const cost = u.cost_known ? ('$'+(u.est_cost_usd||0).toFixed(4)) : ('~$'+(u.est_cost_usd||0).toFixed(4)+' (partial)');
   let html='usage — requests <b>'+fmt(u.requests)+'</b> · in <b>'+fmt(u.input_tokens)
     +'</b> tok · out <b>'+fmt(u.output_tokens)+'</b> tok · est. cost <b>'+cost+'</b>';
+  if((u.cache_read||0)+(u.cache_write||0)>0){
+    html+='<br>cache — read <b>'+fmt(u.cache_read)+'</b> · written <b>'+fmt(u.cache_write)+'</b> tok';
+  }
   if(u.budget_warning){ html+='<br><span class="bwarn">⚠ '+u.budget_warning+'</span>'; }
   usageBar.innerHTML=html;
 }

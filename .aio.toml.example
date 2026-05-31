@@ -67,3 +67,9 @@ base_url = "http://localhost:11434/v1"
 # run_shell = "allow"
 # git_commit = "deny"
 # "*" = "ask"
+
+# ----- Optional: remote MCP server over HTTP/SSE (#4) ------------------------
+# [[mcp.servers]]
+# name = "remote-fs"
+# url = "https://my-mcp-host.example/mcp"
+# # headers = { Authorization = "Bearer ..." }
