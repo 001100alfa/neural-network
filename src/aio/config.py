@@ -167,10 +167,46 @@ class Config:
     auto_context_results: int = 5
     #: self-verify and continue up to N times after an answer (0 = off)
     max_reflections: int = 0
+    #: usable context window in tokens; 0 = auto-detect from the model name
+    context_window: int = 0
 
     @property
     def active(self) -> ProviderConfig:
         return self.providers[self.provider]
+
+    @property
+    def effective_context_window(self) -> int:
+        """Tokens of history to keep before compacting — explicit, or per-model."""
+        return self.context_window or context_window_for(self.active.model)
+
+
+# Known usable context windows (tokens) by model-name substring, longest match
+# wins. These are the API context limits; the agent compacts at ~80% of this.
+_CONTEXT_WINDOWS: list[tuple[str, int]] = [
+    ("claude-sonnet-4", 1_000_000),   # 1M-token tier
+    ("claude-opus-4", 200_000),
+    ("claude-3-5", 200_000),
+    ("claude-3", 200_000),
+    ("claude", 200_000),
+    ("gpt-4.1", 1_000_000),
+    ("gpt-4o", 128_000),
+    ("o1", 200_000), ("o3", 200_000),
+    ("gpt-4", 128_000),
+    ("gemini-1.5", 1_000_000), ("gemini", 1_000_000),
+    ("qwen", 128_000), ("deepseek", 128_000), ("llama", 128_000),
+    ("mistral", 128_000), ("mixtral", 64_000),
+]
+DEFAULT_CONTEXT_WINDOW = 128_000
+
+
+def context_window_for(model: str) -> int:
+    """Best-effort usable context window (tokens) for a model name."""
+    m = (model or "").lower()
+    best = (0, DEFAULT_CONTEXT_WINDOW)
+    for key, window in _CONTEXT_WINDOWS:
+        if key in m and len(key) > best[0]:
+            best = (len(key), window)
+    return best[1]
 
 
 def _read_toml(path: Path) -> dict[str, Any]:
@@ -267,6 +303,8 @@ def load_config(
                           file_cfg.get("auto_context", os.environ.get("AIO_NO_AUTO_CONTEXT") != "1"))),
         auto_context_results=int(file_cfg.get("auto_context_results", 5)),
         max_reflections=int(overrides.get("max_reflections", file_cfg.get("max_reflections", 0))),
+        context_window=int(overrides.get("context_window",
+                           file_cfg.get("context_window", os.environ.get("AIO_CONTEXT_WINDOW", 0)) or 0)),
     )
 
 
