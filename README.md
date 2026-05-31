@@ -89,6 +89,8 @@ Requires Python **3.11+**.
   scripting/CI.
 - **Per-hunk diff approval** — `aio --diff-approve` approves each edit hunk
   individually; only accepted hunks are written.
+- **Cache metrics** — the usage bar reports prompt-cache **read / written**
+  tokens (Anthropic `cache_read` / `cache_creation`) alongside cost.
 - **Prompt caching** — on Anthropic, the (stable) system prompt and tool
   definitions are sent with `cache_control`, cutting cost/latency on repeated
   turns. On by default (`providers.<name>.cache = false` to disable).
@@ -244,8 +246,10 @@ extra dependencies) that drives the same agent:
   and warns when nearing or over the cap.
 - an **MCP tab** — add / remove / restart [MCP](https://modelcontextprotocol.io)
   stdio servers from the dashboard; their tools are registered with the agent
-  live (also configurable in `.aio.toml`). Ships with **11 open-source servers
-  configured out of the box** (filesystem, fetch, memory, sequential-thinking,
+  live (also configurable in `.aio.toml`). Supports **stdio and HTTP/SSE**
+  transports, and exposes a server's **resources** (`read_resource`) and
+  **prompts** (`get_prompt`) in addition to its tools. Ships with **11
+  open-source servers configured out of the box** (filesystem, fetch, memory, sequential-thinking,
   everything, sqlite, postgres, playwright, context7, time, brave-search) —
   listed but **not auto-started** (so launching never spawns 11 processes); hit
   **Start** on the ones you want. A built-in **catalog** (git, github, gitlab,
