@@ -228,7 +228,9 @@ extra dependencies) that drives the same agent:
 - **attach images** (📎) and ask about them — multimodal, sent to vision-capable
   models as image content
 - **multiple conversation tabs** — run several independent chats at once; each
-  keeps its own history (switch / new / close)
+  keeps its own history (switch / new / close) and its **own agent + lock**, so
+  independent conversations stream **concurrently** (the same conversation is
+  serialized)
 - **export / import** a conversation as **Markdown** or **JSON** (import opens
   it in a new tab)
 - **search** across saved conversations (title + message text) with snippets
