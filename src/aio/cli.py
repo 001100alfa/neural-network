@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -46,8 +47,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--host", default="127.0.0.1", help="Web dashboard host (default 127.0.0.1).")
     p.add_argument("--port", type=int, default=8765, help="Web dashboard port (default 8765).")
     p.add_argument("--open", action="store_true", help="Open the dashboard in the default browser (with --web).")
-    p.add_argument("--web-token", default=None,
-                   help="Use this access token for the dashboard instead of a random one.")
+    p.add_argument("--web-token", default=os.environ.get("AIO_WEB_TOKEN") or None,
+                   help="Use this access token for the dashboard instead of a random one "
+                        "(defaults to the AIO_WEB_TOKEN env var if set).")
     p.add_argument("--web-no-auth", action="store_true",
                    help="Disable dashboard authentication (UNSAFE; only on a trusted, isolated host).")
     p.add_argument("--web-auto-approve", action="store_true",

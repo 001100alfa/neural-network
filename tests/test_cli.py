@@ -51,6 +51,18 @@ def test_parser_defaults():
     assert args.prompt == [] and args.reflect == 0 and not args.web
 
 
+def test_web_token_defaults_to_env(monkeypatch):
+    monkeypatch.setenv("AIO_WEB_TOKEN", "from-env-123")
+    assert cli.build_parser().parse_args([]).web_token == "from-env-123"
+    # an explicit flag still wins over the env default
+    assert cli.build_parser().parse_args(["--web-token", "explicit"]).web_token == "explicit"
+
+
+def test_web_token_none_without_env(monkeypatch):
+    monkeypatch.delenv("AIO_WEB_TOKEN", raising=False)
+    assert cli.build_parser().parse_args([]).web_token is None
+
+
 # -- slash commands ---------------------------------------------------------
 
 def test_slash_commands(tmp_path, monkeypatch, capsys):
