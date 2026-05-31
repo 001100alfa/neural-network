@@ -97,12 +97,15 @@ def _structural_weight(path: str, text: str) -> float:
 class _Chunk:
     __slots__ = ("path", "start", "end", "text", "tokens", "embedding", "weight")
 
-    def __init__(self, path: str, start: int, end: int, text: str) -> None:
+    def __init__(self, path: str, start: int, end: int, text: str,
+                 tokens: list[str] | None = None) -> None:
         self.path = path
         self.start = start          # 1-based first line
         self.end = end              # 1-based last line
         self.text = text
-        self.tokens = tokenize(text)
+        # tokens may be supplied (precomputed per line and reused across the
+        # overlapping windows) to avoid re-tokenizing shared lines.
+        self.tokens = tokenize(text) if tokens is None else tokens
         self.embedding: list[float] | None = None
         self.weight = _structural_weight(path, text)
 
@@ -161,16 +164,23 @@ class CodeSearcher:
         lines = text.splitlines()
         if not lines:
             return
+        # Tokenize each line ONCE; the overlapping windows reuse these per-line
+        # token lists instead of re-tokenizing shared lines (windows overlap by
+        # CHUNK_OVERLAP, so each line would otherwise be tokenized ~4x).
+        line_tokens = [tokenize(ln) for ln in lines]
         step = max(1, CHUNK_LINES - CHUNK_OVERLAP)
         for start in range(0, len(lines), step):
             window = lines[start:start + CHUNK_LINES]
             if not any(ln.strip() for ln in window):
                 continue
-            chunk = _Chunk(rel, start + 1, start + len(window), "\n".join(window))
-            if not chunk.tokens:
+            tokens: list[str] = []
+            for lt in line_tokens[start:start + CHUNK_LINES]:
+                tokens.extend(lt)
+            if not tokens:
                 continue
+            chunk = _Chunk(rel, start + 1, start + len(window), "\n".join(window), tokens=tokens)
             self.chunks.append(chunk)
-            for term in set(chunk.tokens):
+            for term in set(tokens):
                 self.df[term] = self.df.get(term, 0) + 1
             if start + CHUNK_LINES >= len(lines):
                 break

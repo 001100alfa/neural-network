@@ -162,3 +162,28 @@ def test_search_prefers_implementation_over_test_file(tmp_path):
     s = CodeSearcher(tmp_path).build()
     hits = s.search("retry exponential backoff rate limit", k=2)
     assert hits[0]["path"] == "retry.py"          # implementation wins despite test repeating words
+
+
+# -- per-line tokenization optimization (must not change results) -----------
+
+def test_per_line_tokens_match_whole_text():
+    # the index reuses per-line token lists across overlapping windows; the
+    # result must be identical to tokenizing the joined window text.
+    lines = ["def parseHTTPRequest(self, x):",
+             "    return self.compute_total(x) + y",
+             "",
+             "class Foo: pass"]
+    whole = tokenize("\n".join(lines))
+    per_line = []
+    for ln in lines:
+        per_line.extend(tokenize(ln))
+    assert whole == per_line
+
+
+def test_chunk_accepts_precomputed_tokens():
+    from aio.search import _Chunk
+    toks = ["a", "b"]
+    c = _Chunk("f.py", 1, 1, "a b", tokens=toks)
+    assert c.tokens is toks                       # reused, not recomputed
+    c2 = _Chunk("f.py", 1, 1, "a b")
+    assert c2.tokens == ["a", "b"]                # still tokenizes when not given
