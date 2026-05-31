@@ -64,6 +64,7 @@ class WriteFileTool(Tool):
         old = p.read_text("utf-8", "replace") if existed and p.is_file() else ""
         if ctx.ui is not None:
             ctx.ui.show_diff(old, content, _relpath(p, ctx))
+        ctx.snapshot(p, f"write_file {_relpath(p, ctx)}")
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
         verb = "Overwrote" if existed else "Created"
@@ -109,6 +110,7 @@ class EditFileTool(Tool):
         new_text = text.replace(old_string, new_string) if replace_all else text.replace(old_string, new_string, 1)
         if ctx.ui is not None:
             ctx.ui.show_diff(text, new_text, _relpath(p, ctx))
+        ctx.snapshot(p, f"edit_file {_relpath(p, ctx)}")
         p.write_text(new_text, encoding="utf-8")
         n = count if replace_all else 1
         return f"Edited {_relpath(p, ctx)} ({n} replacement{'s' if n != 1 else ''})."
