@@ -217,7 +217,9 @@ class AgentService:
         }
         # multiple concurrent conversations (tabs): id -> message history
         self.conversations: dict[str, list] = {"default": []}
+        self._summaries: dict[str, str] = {}     # per-conversation compaction summary
         self._active_conv = "default"
+        self.plan_mode = False                   # read-only planning mode
         # MCP servers + their tools (loaded once, registered on every rebuild)
         self._mcp_servers: list = []
         self._mcp_tools: list = []
@@ -238,16 +240,21 @@ class AgentService:
         registry = default_registry()
         for tool in self._mcp_tools:
             registry.register(tool)
+        system_prompt = self.config.system_prompt
+        if self.config.project_memory:
+            system_prompt += "\n\n# Project memory (CLAUDE.md / AGENTS.md)\n" + self.config.project_memory
         self.agent = Agent(
             provider=build_provider(self.config),
             tools=registry,
             ctx=ctx,
             ui=self.ui,
-            system_prompt=self.config.system_prompt,
+            system_prompt=system_prompt,
             max_steps=self.config.max_steps,
             stream=True,  # web chat streams token-by-token over SSE
+            plan_mode=self.plan_mode,
         )
-        # keep the active conversation's history attached to the rebuilt agent
+        # carry the running summary across rebuilds, attach the active history
+        self.agent.summary = self._summaries.get(self._active_conv, "")
         self.agent.messages = self.conversations.setdefault(self._active_conv, [])
 
     # -- MCP servers (web mode) ------------------------------------------
@@ -294,12 +301,22 @@ class AgentService:
                 for t in self.agent.tools
             ],
             "history": len(self.agent.messages),
+            "plan_mode": self.plan_mode,
+            "memory": bool(self.config.project_memory),
+            "summary": bool(self._summaries.get(self._active_conv)),
         }
+
+    def set_plan_mode(self, on: bool) -> dict[str, Any]:
+        with self._lock:
+            self.plan_mode = bool(on)
+            self._build_agent()
+            return {"plan_mode": self.plan_mode}
 
     def _select_conv(self, conv_id: str) -> None:
         """Point the agent at the message history for ``conv_id`` (multi-tab)."""
         conv_id = conv_id or "default"
         self.agent.messages = self.conversations.setdefault(conv_id, [])
+        self.agent.summary = self._summaries.get(conv_id, "")
         self._active_conv = conv_id
 
     def chat(self, message: str, images=None, conv_id: str = "default") -> dict[str, Any]:
@@ -311,6 +328,7 @@ class AgentService:
             except ProviderError as exc:
                 self.ui.error(str(exc))
                 final = ""
+            self._summaries[self._active_conv] = self.agent.summary
             self._accumulate_usage()
             return {"events": self.ui.drain(), "final": final, "usage": self.usage_info()}
 
@@ -331,6 +349,7 @@ class AgentService:
                 final = ""
             finally:
                 self.ui.sink = None
+            self._summaries[self._active_conv] = self.agent.summary
             self._accumulate_usage()
             emit({"type": "done", "final": final, "usage": self.usage_info()})
 
@@ -918,6 +937,8 @@ def _make_handler(service: AgentService):
                     self._json(200, service.mcp_restart())
                 elif self.path == "/api/config":
                     self._json(200, service.configure(payload.get("provider"), payload.get("model")))
+                elif self.path == "/api/plan":
+                    self._json(200, service.set_plan_mode(bool(payload.get("on"))))
                 elif self.path == "/api/providers":
                     self._json(200, service.set_provider_key(
                         payload.get("provider", ""),
@@ -1198,6 +1219,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <button id="exportJson" title="export as JSON">⤓ JSON</button>
     <button id="importBtn" title="import a JSON conversation">Import</button>
     <input id="importInput" type="file" accept="application/json,.json" style="display:none"/>
+    <button id="planBtn" title="plan mode — read-only; produce a plan, change nothing">Plan</button>
+    <span id="memBadge" class="membadge" title="project memory loaded (CLAUDE.md/AGENTS.md)">🧠</span>
     <button id="gearBtn" title="settings">⚙</button>
   </div>
   <div id="settingsPanel" class="settings">
@@ -1400,7 +1423,15 @@ async function loadInfo(){
   document.getElementById('tools').innerHTML='';
   d.tools.forEach(t=>{const x=el('tool');x.innerHTML='<b>'+t.name+'</b><small>'+t.description+'</small>';
     document.getElementById('tools').appendChild(x);});
+  document.getElementById('memBadge').classList.toggle('on', !!d.memory);
+  document.getElementById('planBtn').classList.toggle('on', !!d.plan_mode);
 }
+document.getElementById('planBtn').onclick=async()=>{
+  const on=!document.getElementById('planBtn').classList.contains('on');
+  await fetch('/api/plan',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({on})});
+  loadInfo();
+};
 
 // ---- conversation tabs (multiple concurrent chats) ----
 let convs={}, activeConv=null, convSeq=0;

@@ -46,6 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--host", default="127.0.0.1", help="Web dashboard host (default 127.0.0.1).")
     p.add_argument("--port", type=int, default=8765, help="Web dashboard port (default 8765).")
     p.add_argument("--open", action="store_true", help="Open the dashboard in the default browser (with --web).")
+    p.add_argument("--plan", action="store_true", help="Plan mode: read-only; produce a plan, change nothing.")
     p.add_argument("--list-tools", action="store_true", help="List tools and exit.")
     p.add_argument("--version", action="version", version=f"aio {__version__}")
     return p
@@ -200,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
         serve(config, host=args.host, port=args.port, open_browser=args.open)
         return 0
 
-    agent, mcp_servers = _make_agent(config, ui, no_mcp=args.no_mcp)
+    agent, mcp_servers = _make_agent(config, ui, no_mcp=args.no_mcp, plan_mode=args.plan)
 
     try:
         if args.prompt:

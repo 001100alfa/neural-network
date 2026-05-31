@@ -124,6 +124,8 @@ class Config:
     max_steps: int = 50
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
     mcp_servers: list[dict[str, Any]] = field(default_factory=list)
+    #: project/instruction memory loaded from CLAUDE.md / AGENTS.md / .aio.md
+    project_memory: str = ""
 
     @property
     def active(self) -> ProviderConfig:
@@ -211,7 +213,28 @@ def load_config(
         max_steps=int(overrides.get("max_steps", file_cfg.get("max_steps", 50))),
         system_prompt=file_cfg.get("system_prompt", DEFAULT_SYSTEM_PROMPT),
         mcp_servers=mcp_servers,
+        project_memory=load_project_memory(workdir),
     )
+
+
+def load_project_memory(workdir: Path) -> str:
+    """Concatenate instruction/memory files (CLAUDE.md / AGENTS.md / .aio.md) plus
+    a global ~/.config/aio/CLAUDE.md, so the agent has standing project context."""
+    parts: list[str] = []
+    for name in ("CLAUDE.md", "AGENTS.md", ".aio.md"):
+        f = workdir / name
+        if f.is_file():
+            try:
+                parts.append(f"## {name}\n{f.read_text('utf-8')[:20000]}")
+            except OSError:
+                pass
+    g = Path.home() / ".config" / "aio" / "CLAUDE.md"
+    if g.is_file():
+        try:
+            parts.append(f"## global CLAUDE.md\n{g.read_text('utf-8')[:20000]}")
+        except OSError:
+            pass
+    return "\n\n".join(parts)
 
 
 def keys_file_path() -> Path:
