@@ -83,6 +83,8 @@ def _make_agent(config, ui: UI, no_mcp: bool, plan_mode: bool = False, per_hunk:
         per_hunk=per_hunk,
     )
     system_prompt = config.system_prompt
+    if config.project_map:
+        system_prompt += "\n\n# Project map (auto-generated)\n" + config.project_map
     if config.project_memory:
         system_prompt += "\n\n# Project memory (CLAUDE.md / AGENTS.md)\n" + config.project_memory
     agent = Agent(

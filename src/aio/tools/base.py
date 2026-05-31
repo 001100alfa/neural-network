@@ -138,6 +138,7 @@ def default_registry() -> ToolRegistry:
     # Imported here to avoid a circular import at module load time.
     from .files import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
     from .git import GitCommitTool, GitDiffTool, GitStatusTool
+    from .multiedit import MultiEditTool
     from .search import GlobTool, GrepTool
     from .background import CheckBackgroundTool, RunBackgroundTool
     from .shell import RunShellTool
@@ -150,6 +151,7 @@ def default_registry() -> ToolRegistry:
             ReadFileTool(),
             WriteFileTool(),
             EditFileTool(),
+            MultiEditTool(),
             ListDirTool(),
             GlobTool(),
             GrepTool(),

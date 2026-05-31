@@ -60,3 +60,9 @@ def test_project_memory_loaded(tmp_path):
     assert "Always use 4-space indents." in mem and "Run tests before committing." in mem
     cfg = load_config(workdir=tmp_path)
     assert "CLAUDE.md" in cfg.project_memory and "AGENTS.md" in cfg.project_memory
+
+
+def test_project_map_loaded_into_config(tmp_path):
+    (tmp_path / "main.py").write_text("print(1)\n")
+    cfg = load_config(workdir=tmp_path)
+    assert "main.py" in cfg.project_map and "Python" in cfg.project_map
