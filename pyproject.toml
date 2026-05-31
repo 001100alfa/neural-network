@@ -33,6 +33,7 @@ Repository = "https://github.com/001100alfa/neural-network"
 [project.scripts]
 aio = "aio.cli:main"
 aio-eval = "aio.eval:main"
+aio-benchmark = "aio.benchmark:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
