@@ -154,6 +154,13 @@ def default_registry() -> ToolRegistry:
     """Build a registry with all built-in tools."""
 
     # Imported here to avoid a circular import at module load time.
+    from .fileops import (
+        ArchiveTool,
+        CopyPathTool,
+        DeletePathTool,
+        MakeDirTool,
+        MovePathTool,
+    )
     from .files import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
     from .git import GitCommitTool, GitDiffTool, GitStatusTool
     from .multiedit import MultiEditTool
@@ -174,6 +181,11 @@ def default_registry() -> ToolRegistry:
             MultiEditTool(),
             RenameSymbolTool(),
             ListDirTool(),
+            MakeDirTool(),
+            MovePathTool(),
+            CopyPathTool(),
+            DeletePathTool(),
+            ArchiveTool(),
             GlobTool(),
             GrepTool(),
             SearchCodeTool(),
