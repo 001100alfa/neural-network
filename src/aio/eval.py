@@ -197,6 +197,57 @@ def golden_cases() -> list[EvalCase]:
                 return AssistantTurn(content="Done.", tool_calls=[])
         return P()
 
+    def fix_logic_ref():
+        class P:
+            def __init__(self): self.n = 0
+            def chat(self, messages, tools=None, system=None):
+                self.n += 1
+                if self.n == 1:
+                    return AssistantTurn(content="Off-by-one in the average.", tool_calls=[ToolCall(
+                        "1", "edit_file", {"path": "stats.py",
+                        "old_string": "sum(xs) / (len(xs) + 1)", "new_string": "sum(xs) / len(xs)"})])
+                if self.n == 2:
+                    return AssistantTurn(content="Verifying.", tool_calls=[ToolCall(
+                        "2", "run_shell", {"command": "python3 -m pytest -q"})])
+                return AssistantTurn(content="Done.", tool_calls=[])
+        return P()
+
+    def cross_file_ref():
+        class P:
+            def __init__(self): self.n = 0
+            def chat(self, messages, tools=None, system=None):
+                self.n += 1
+                if self.n == 1:
+                    return AssistantTurn(content="Implementing slugify.", tool_calls=[ToolCall(
+                        "1", "write_file", {"path": "strutil.py",
+                        "content": "def slugify(s):\n    return s.lower().replace(' ', '-')\n"})])
+                if self.n == 2:
+                    return AssistantTurn(content="Verifying.", tool_calls=[ToolCall(
+                        "2", "run_shell", {"command": "python3 -m pytest -q"})])
+                return AssistantTurn(content="Done.", tool_calls=[])
+        return P()
+
+    def navigate_ref():
+        class P:
+            def __init__(self): self.n = 0
+            def chat(self, messages, tools=None, system=None):
+                self.n += 1
+                if self.n == 1:
+                    return AssistantTurn(content="Locating compute().", tool_calls=[ToolCall(
+                        "1", "find_symbol", {"name": "compute"})])
+                if self.n == 2:
+                    return AssistantTurn(content="Reading it.", tool_calls=[ToolCall(
+                        "2", "read_file", {"path": "m.py", "symbol": "compute"})])
+                if self.n == 3:
+                    return AssistantTurn(content="Fixing the operator.", tool_calls=[ToolCall(
+                        "3", "edit_file", {"path": "m.py",
+                        "old_string": "return n + 2", "new_string": "return n * 2"})])
+                if self.n == 4:
+                    return AssistantTurn(content="Verifying.", tool_calls=[ToolCall(
+                        "4", "run_shell", {"command": "python3 -m pytest -q"})])
+                return AssistantTurn(content="Done.", tool_calls=[])
+        return P()
+
     return [
         EvalCase(
             name="fix-divide-by-zero",
@@ -218,6 +269,42 @@ def golden_cases() -> list[EvalCase]:
             },
             check=pytest_passes,
             reference=add_multiply_ref,
+        ),
+        EvalCase(
+            name="fix-logic-bug",
+            prompt="average() returns the wrong number; fix the logic so the tests pass.",
+            files={
+                "stats.py": "def average(xs):\n    return sum(xs) / (len(xs) + 1)\n",
+                "test_stats.py": "from stats import average\n\n"
+                                 "def test_avg():\n    assert average([2, 4, 6]) == 4\n",
+            },
+            check=pytest_passes,
+            reference=fix_logic_ref,
+        ),
+        EvalCase(
+            name="implement-across-two-files",
+            prompt="strutil.slugify is imported by app.py but doesn't exist; implement it.",
+            files={
+                "strutil.py": "",
+                "app.py": "from strutil import slugify\n\n"
+                          "def title_to_slug(t):\n    return slugify(t)\n",
+                "test_app.py": "from app import title_to_slug\n\n"
+                               "def test_slug():\n    assert title_to_slug('Hello World') == 'hello-world'\n",
+            },
+            check=pytest_passes,
+            reference=cross_file_ref,
+        ),
+        EvalCase(
+            name="navigate-then-fix",
+            prompt="compute() has a bug. Locate it, read it, fix it, and verify.",
+            files={
+                "m.py": "def compute(n):\n    return n + 2\n\n"
+                        "def helper():\n    return compute(0)\n",
+                "test_m.py": "from m import compute\n\n"
+                             "def test_compute():\n    assert compute(5) == 10\n",
+            },
+            check=pytest_passes,
+            reference=navigate_ref,
         ),
     ]
 

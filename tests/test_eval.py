@@ -15,7 +15,7 @@ from aio.providers import AssistantTurn, ToolCall
 
 def test_golden_suite_passes_offline():
     cases = golden_cases()
-    assert len(cases) >= 2
+    assert len(cases) >= 5                          # broadened beyond the first two
     card = run_suite(cases, reference_agent_factory, live=False)
     assert card.total == len(cases)
     assert card.passed == card.total, card.format()
@@ -23,6 +23,14 @@ def test_golden_suite_passes_offline():
     # results carry observability: tool calls actually happened
     for r in card.results:
         assert r.passed and r.tools and "run_shell" in r.tools
+
+
+def test_navigation_case_uses_codebase_tools():
+    cases = {c.name: c for c in golden_cases()}
+    assert "navigate-then-fix" in cases
+    card = run_suite([cases["navigate-then-fix"]], reference_agent_factory, live=False)
+    r = card.results[0]
+    assert r.passed and "find_symbol" in r.tools and "edit_file" in r.tools
 
 
 def test_scorecard_format_reports_mode_and_counts():
