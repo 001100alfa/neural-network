@@ -41,6 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-y", "--yes", action="store_true", help="Auto-approve all tool calls.")
     p.add_argument("--allow-outside", action="store_true", help="Allow file access outside the workdir.")
     p.add_argument("--max-steps", type=int, help="Max agent steps per turn.")
+    p.add_argument("--context-window", type=int, metavar="TOKENS",
+                   help="Usable context window before compaction (default: auto-detect from model).")
     p.add_argument("--no-color", action="store_true", help="Disable coloured output.")
     p.add_argument("--no-mcp", action="store_true", help="Do not start configured MCP servers.")
     p.add_argument("--web", action="store_true", help="Launch the browser dashboard instead of the CLI.")
@@ -111,6 +113,7 @@ def _make_agent(config, ui: UI, no_mcp: bool, plan_mode: bool = False, per_hunk:
         auto_context=config.auto_context,
         auto_context_k=config.auto_context_results,
         max_reflections=config.max_reflections,
+        context_limit=config.effective_context_window,
     )
     return agent, mcp_servers
 
@@ -212,6 +215,8 @@ def main(argv: list[str] | None = None) -> int:
         overrides["allow_outside_workdir"] = True
     if args.max_steps is not None:
         overrides["max_steps"] = args.max_steps
+    if args.context_window is not None:
+        overrides["context_window"] = args.context_window
     if args.reflect:
         overrides["max_reflections"] = args.reflect
 

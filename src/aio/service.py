@@ -248,6 +248,7 @@ class AgentService(SessionsMixin, ProvidersMixin, PanelsMixin):
             auto_context=self.config.auto_context,
             auto_context_k=self.config.auto_context_results,
             max_reflections=self.config.max_reflections,
+            context_limit=self.config.effective_context_window,
         )
         agent.summary = summary
         agent.messages = messages
@@ -333,6 +334,7 @@ class AgentService(SessionsMixin, ProvidersMixin, PanelsMixin):
             "output_style": self.config.output_style,
             "token_backend": _token_backend(),
             "tool_approval": "gated" if self.gated else "auto",
+            "context_window": self.config.effective_context_window,
         }
 
     def set_plan_mode(self, on: bool) -> dict[str, Any]:
