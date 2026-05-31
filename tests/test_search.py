@@ -130,3 +130,35 @@ def test_search_code_tool_ranks_and_caches(tmp_path):
     cached = ctx.code_searcher
     tool.run({"query": "login password"}, ctx)
     assert ctx.code_searcher is cached
+
+
+# -- structural relevance prior (implementation > tests/docs) ---------------
+
+def test_structural_weight_downweights_tests_and_docs():
+    from aio.search import _structural_weight
+    impl = "def with_backoff(fn):\n    retry on rate limit\n"
+    assert _structural_weight("src/retry.py", impl) > _structural_weight("tests/test_retry.py", impl)
+    assert _structural_weight("src/retry.py", impl) > _structural_weight("docs/guide.md", impl)
+
+
+def test_structural_weight_boosts_definitions():
+    from aio.search import _structural_weight
+    with_def = "def parse(x):\n    return x\n"
+    no_def = "parse the request and handle errors here\n"
+    assert _structural_weight("a.py", with_def) > _structural_weight("a.py", no_def)
+
+
+def test_search_prefers_implementation_over_test_file(tmp_path):
+    # both files mention the query words; the implementation must rank first
+    (tmp_path / "retry.py").write_text(
+        "def with_backoff(fn):\n"
+        "    # retry with exponential backoff on rate limit errors\n"
+        "    for i in range(5):\n        sleep(2 ** i)\n")
+    (tmp_path / "test_retry.py").write_text(
+        "def test_with_backoff():\n"
+        "    # retry with exponential backoff on rate limit errors works\n"
+        "    assert with_backoff(lambda: 1) == 1\n"
+        "    # retry retry backoff backoff rate limit rate limit\n")
+    s = CodeSearcher(tmp_path).build()
+    hits = s.search("retry exponential backoff rate limit", k=2)
+    assert hits[0]["path"] == "retry.py"          # implementation wins despite test repeating words

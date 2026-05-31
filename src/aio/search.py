@@ -70,8 +70,32 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (na * nb)
 
 
+def _structural_weight(path: str, text: str) -> float:
+    """A zero-dependency relevance prior: favour implementation over tests/docs.
+
+    Pure BM25 over-ranks test and doc files that merely *repeat* query words.
+    This nudges results toward where behaviour actually lives, without any
+    embeddings: down-weight tests/docs/fixtures, up-weight chunks that define
+    a symbol (def/class/func/...). Applied as a multiplier on the lexical score.
+    """
+    w = 1.0
+    low = path.lower()
+    name = low.rsplit("/", 1)[-1]
+    if name.startswith("test_") or name.endswith(("_test.py", ".test.js", ".spec.js")) \
+            or "/tests/" in low or "/test/" in low or low.endswith((".md", ".rst", ".txt")):
+        w *= 0.55                                   # tests/docs: relevant but secondary
+    if "/examples/" in low or "/fixtures/" in low or "/vendor/" in low:
+        w *= 0.7
+    # chunks that DEFINE something are usually what "how does X work" wants
+    import re as _re
+    if _re.search(r"^\s*(?:export\s+)?(?:async\s+)?(?:def|class|func|function|fn|interface|type|struct)\b",
+                  text, _re.M):
+        w *= 1.3
+    return w
+
+
 class _Chunk:
-    __slots__ = ("path", "start", "end", "text", "tokens", "embedding")
+    __slots__ = ("path", "start", "end", "text", "tokens", "embedding", "weight")
 
     def __init__(self, path: str, start: int, end: int, text: str) -> None:
         self.path = path
@@ -80,6 +104,7 @@ class _Chunk:
         self.text = text
         self.tokens = tokenize(text)
         self.embedding: list[float] | None = None
+        self.weight = _structural_weight(path, text)
 
 
 class CodeSearcher:
@@ -202,9 +227,11 @@ class CodeSearcher:
                 _cosine(qvec, c.embedding) if c.embedding is not None else 0.0
                 for c in self.chunks
             ]
-            scores = [0.6 * s + 0.4 * b for s, b in zip(_norm(sims), _norm(bm))]
+            base = [0.6 * s + 0.4 * b for s, b in zip(_norm(sims), _norm(bm))]
         else:
-            scores = bm
+            base = bm
+        # apply the structural relevance prior (implementation > tests/docs)
+        scores = [v * c.weight for v, c in zip(base, self.chunks)]
 
         ranked = sorted(range(len(self.chunks)), key=lambda i: scores[i], reverse=True)
         out: list[dict] = []

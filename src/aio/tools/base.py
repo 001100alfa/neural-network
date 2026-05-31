@@ -49,6 +49,16 @@ class ToolContext:
     sandbox: Any = None
     # when True, edits are approved hunk-by-hunk via ui.confirm_hunk (#9)
     per_hunk: bool = False
+    # working set: relpaths the agent has read/edited this run, most-recent last
+    # (multi-file context — the files currently "in play")
+    working_set: list[str] = field(default_factory=list)
+
+    def touch_file(self, relpath: str) -> None:
+        """Record that ``relpath`` is part of the current working set."""
+        if relpath in self.working_set:
+            self.working_set.remove(relpath)
+        self.working_set.append(relpath)
+        del self.working_set[:-12]   # keep the 12 most-recently-touched
 
     def snapshot(self, path: "Path", label: str) -> None:
         """Record the pre-edit contents of ``path`` so the change can be undone."""
