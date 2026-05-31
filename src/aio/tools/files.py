@@ -10,6 +10,63 @@ from .base import Tool, ToolContext, ToolError, _relpath
 MAX_READ_BYTES = 400_000
 
 
+def _symbol_span(text: str, symbol: str) -> tuple[int, int] | None:
+    """Return (start_line, end_line) (1-based, inclusive) for a symbol definition.
+
+    Uses Python ``ast`` (supports ``Class.method``); otherwise scans for a line
+    defining the name and takes an indentation/brace-bounded block.
+    """
+    import ast
+
+    name = symbol.split(".")[-1]
+    try:
+        tree = ast.parse(text)
+
+        def find(nodes):
+            for node in nodes:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    if node.name == name or node.name == symbol:
+                        start = min([node.lineno] + [d.lineno for d in node.decorator_list])
+                        return start, getattr(node, "end_lineno", node.lineno)
+                    if isinstance(node, ast.ClassDef):
+                        hit = find(node.body)
+                        if hit:
+                            return hit
+            return None
+
+        span = find(tree.body)
+        if span:
+            return span
+    except SyntaxError:
+        pass
+
+    # generic fallback: find a definition line, then take an indent/brace block
+    lines = text.splitlines()
+    import re
+
+    pat = re.compile(rf"\b{re.escape(name)}\b")
+    for i, ln in enumerate(lines):
+        if pat.search(ln) and re.search(r"\b(def|function|func|fn|class|struct|type|interface)\b", ln):
+            start = i + 1
+            base_indent = len(ln) - len(ln.lstrip())
+            j = i + 1
+            depth = ln.count("{") - ln.count("}")
+            braces = "{" in ln
+            while j < len(lines):
+                cur = lines[j]
+                if braces:
+                    depth += cur.count("{") - cur.count("}")
+                    if depth <= 0:
+                        j += 1
+                        break
+                else:
+                    if cur.strip() and (len(cur) - len(cur.lstrip())) <= base_indent:
+                        break
+                j += 1
+            return start, min(j, len(lines))
+    return None
+
+
 def _apply_selected_hunks(old: str, new: str, ctx: ToolContext, path: str) -> tuple[str, int, int]:
     """Ask the UI per hunk; rebuild text keeping only accepted hunks.
 
@@ -71,6 +128,8 @@ class ReadFileTool(Tool):
             "path": {"type": "string", "description": "Path to the file, relative to the working directory."},
             "offset": {"type": "integer", "description": "1-based line to start from (optional)."},
             "limit": {"type": "integer", "description": "Maximum number of lines to read (optional)."},
+            "symbol": {"type": "string", "description": "Read just this function/class/method's "
+                       "definition from the file (Python; falls back to a line scan otherwise)."},
         },
         "required": ["path"],
     }
@@ -84,6 +143,17 @@ class ReadFileTool(Tool):
         data = p.read_bytes()[:MAX_READ_BYTES]
         text = data.decode("utf-8", "replace")
         lines = text.splitlines()
+
+        symbol = (args.get("symbol") or "").strip()
+        if symbol:
+            span = _symbol_span(text, symbol)
+            if span is None:
+                raise ToolError(f"symbol {symbol!r} not found in {_relpath(p, ctx)}.")
+            offset, end = span
+            chunk = lines[offset - 1:end]
+            numbered = "\n".join(f"{offset + i:>6}\t{ln}" for i, ln in enumerate(chunk))
+            return numbered or "(empty)"
+
         offset = max(1, int(args.get("offset", 1)))
         limit = int(args.get("limit", len(lines)))
         chunk = lines[offset - 1 : offset - 1 + limit]

@@ -60,7 +60,11 @@ Requires Python **3.11+**.
 - **Symbol navigation** — a `find_symbol` tool jumps to where a function/class/
   method is **defined** (file:line) via a cached, gitignore-aware symbol index
   (Python via `ast`; JS/TS/Go/Rust/Ruby/Java via patterns) — precise navigation
-  instead of grepping.
+  instead of grepping. `read_file` also takes a `symbol=` to read just that
+  definition from a large file.
+- **Verify-your-work loop** — the agent is instructed to orient first, track
+  multi-step work with todos, run the project's tests/linter after edits, and
+  retry on tool errors rather than guessing — for reliable autonomous runs.
 - **Context compaction** — long conversations are summarised automatically as
   they approach the context limit (recent turns kept verbatim) so sessions don't
   overflow the model's context window. Token estimates use a real tokenizer
