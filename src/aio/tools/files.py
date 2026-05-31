@@ -169,6 +169,7 @@ class ReadFileTool(Tool):
         data = p.read_bytes()[:MAX_READ_BYTES]
         text = data.decode("utf-8", "replace")
         lines = text.splitlines()
+        ctx.touch_file(_relpath(p, ctx))
 
         symbol = (args.get("symbol") or "").strip()
         if symbol:
@@ -213,6 +214,7 @@ class WriteFileTool(Tool):
         ctx.snapshot(p, f"write_file {_relpath(p, ctx)}")
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
+        ctx.touch_file(_relpath(p, ctx))
         verb = "Overwrote" if existed else "Created"
         return f"{verb} {_relpath(p, ctx)} ({len(content)} bytes)."
 
@@ -265,6 +267,7 @@ class EditFileTool(Tool):
             ctx.ui.show_diff(text, new_text, _relpath(p, ctx))
         ctx.snapshot(p, f"edit_file {_relpath(p, ctx)}")
         p.write_text(new_text, encoding="utf-8")
+        ctx.touch_file(_relpath(p, ctx))
         n = count if replace_all else 1
         return f"Edited {_relpath(p, ctx)} ({n} replacement{'s' if n != 1 else ''}){note}."
 

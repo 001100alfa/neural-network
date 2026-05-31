@@ -131,6 +131,14 @@ class Agent:
             parts.append(f"\n\n# Summary of earlier conversation\n{self.summary}")
         if self.plan_mode:
             parts.append(PLAN_MODE_NOTE)
+        working = getattr(self.ctx, "working_set", None)
+        if working:
+            parts.append(
+                "\n\n# Files in play this session (most recent last)\n"
+                "You have already read or edited these — prefer continuing with them "
+                "over re-discovering, and keep changes consistent across them:\n"
+                + "\n".join(f"- {p}" for p in working)
+            )
         if self._auto_context:
             parts.append(
                 "\n\n# Retrieved code context (auto, keyword search)\n"
