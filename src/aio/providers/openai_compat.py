@@ -129,7 +129,7 @@ class OpenAICompatProvider(Provider):
         parts: list[str] = []
         frags: dict[int, dict] = {}
         usage = None
-        for line in self._stream_lines(url, headers, body):  # pragma: no cover - network
+        for line in self._stream_lines(url, headers, body):
             if not line.startswith("data:"):
                 continue
             data = line[5:].strip()

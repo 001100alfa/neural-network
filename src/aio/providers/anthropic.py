@@ -150,7 +150,7 @@ class AnthropicProvider(Provider):
         parts: list[str] = []
         blocks: dict[int, dict] = {}
         usage: dict[str, Any] = {}
-        for line in self._stream_lines(url, headers, body):  # pragma: no cover - network
+        for line in self._stream_lines(url, headers, body):
             if not line.startswith("data:"):
                 continue
             data = line[5:].strip()
