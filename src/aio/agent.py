@@ -50,6 +50,8 @@ class Agent:
         self.auto_compact = auto_compact
         self.context_limit = context_limit
         self.compact_keep = 6  # recent messages kept verbatim during compaction
+        self._token_factor = 1.0   # self-calibration multiplier for token estimates (#1)
+        self._last_raw_estimate = 0
         self.plan_mode = plan_mode
         self.messages: list[Message] = []
         #: running summary of compacted (older) messages, fed via the system prompt
@@ -119,14 +121,35 @@ class Agent:
         return specs
 
     # -- context compaction ----------------------------------------------
+    def _raw_tokens(self, msgs: list[Message]) -> int:
+        from .tokens import count_text
+
+        total = count_text(self.summary)
+        for m in msgs:
+            total += count_text(m.content or "")
+            for tc in m.tool_calls:
+                total += count_text(tc.name) + count_text(json.dumps(tc.arguments))
+        return total
+
     def _estimate_tokens(self, msgs: list[Message] | None = None) -> int:
         msgs = self.messages if msgs is None else msgs
-        chars = len(self.summary)
-        for m in msgs:
-            chars += len(m.content or "")
-            for tc in m.tool_calls:
-                chars += len(tc.name) + len(json.dumps(tc.arguments))
-        return chars // 4  # ~4 chars per token
+        return int(self._raw_tokens(msgs) * self._token_factor)
+
+    def _calibrate_tokens(self, turn_usage: dict | None) -> None:
+        """Nudge the estimate toward the provider's reported input tokens (#1)."""
+        if not turn_usage:
+            return
+        actual = (turn_usage.get("input_tokens") or turn_usage.get("prompt_tokens") or 0)
+        actual += turn_usage.get("cache_read_input_tokens", 0) or 0
+        actual += turn_usage.get("cache_creation_input_tokens", 0) or 0
+        if actual <= 0:
+            return
+        est = self._last_raw_estimate
+        if est and est > 0:
+            ratio = actual / est
+            if 0.2 < ratio < 5.0:  # ignore wild outliers
+                # exponential moving average toward the observed ratio
+                self._token_factor = 0.7 * self._token_factor + 0.3 * ratio
 
     def _summarize(self, msgs: list[Message]) -> str:
         lines = []
@@ -190,6 +213,8 @@ class Agent:
 
         for _ in range(self.max_steps):
             self.ui.thinking()
+            # remember what we estimated for this exact request, to calibrate after
+            self._last_raw_estimate = self._raw_tokens(self.messages)
             if use_stream:
                 turn = self.provider.stream_chat(
                     self.messages, tools=self._effective_specs(),
@@ -199,6 +224,7 @@ class Agent:
                 turn = self.provider.chat(
                     self.messages, tools=self._effective_specs(), system=self._effective_system()
                 )
+            self._calibrate_tokens(turn.usage)
             inp, out = self._normalise_usage(turn.usage)
             self.run_usage["requests"] += 1
             self.run_usage["input_tokens"] += inp
