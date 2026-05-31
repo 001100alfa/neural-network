@@ -22,6 +22,7 @@ from .agent import Agent
 from .catalog import DEFAULT_MCP_SERVERS, MCP_CATALOG
 from .config import PROVIDER_DEFAULTS, Config, KeyStore
 from .pricing import estimate_cost
+from .tokens import active_backend as _token_backend
 from .providers import Message, ProviderError, ToolCall, build_provider
 from .tools import ToolContext, ToolError, default_registry
 
@@ -312,6 +313,7 @@ class AgentService:
             "thinking_tokens": self.config.active.thinking_tokens,
             "cache": self.config.active.cache,
             "output_style": self.config.output_style,
+            "token_backend": _token_backend(),
         }
 
     def set_plan_mode(self, on: bool) -> dict[str, Any]:

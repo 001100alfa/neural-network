@@ -41,6 +41,8 @@ class ToolContext:
     background: dict = field(default_factory=dict)
     # lazily-built symbol index for find_symbol (#K)
     code_index: Any = None
+    # lazily-built BM25 code searcher for search_code
+    code_searcher: Any = None
     # when True, edits are approved hunk-by-hunk via ui.confirm_hunk (#9)
     per_hunk: bool = False
 
@@ -141,7 +143,7 @@ def default_registry() -> ToolRegistry:
     from .files import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
     from .git import GitCommitTool, GitDiffTool, GitStatusTool
     from .multiedit import MultiEditTool
-    from .search import GlobTool, GrepTool
+    from .search import GlobTool, GrepTool, SearchCodeTool
     from .background import CheckBackgroundTool, RunBackgroundTool
     from .shell import RunShellTool
     from .symbols import FindSymbolTool
@@ -158,6 +160,7 @@ def default_registry() -> ToolRegistry:
             ListDirTool(),
             GlobTool(),
             GrepTool(),
+            SearchCodeTool(),
             FindSymbolTool(),
             RunShellTool(),
             GitStatusTool(),

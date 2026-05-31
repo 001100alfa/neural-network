@@ -9,7 +9,8 @@ from .tools import ToolContext, ToolError, ToolRegistry
 from .ui import UI
 
 # Tools allowed while in read-only "plan mode".
-READONLY_TOOLS = {"read_file", "list_dir", "glob", "grep", "git_status", "git_diff", "find_symbol"}
+READONLY_TOOLS = {"read_file", "list_dir", "glob", "grep", "git_status", "git_diff",
+                  "find_symbol", "search_code"}
 
 PLAN_MODE_NOTE = """
 
