@@ -119,8 +119,14 @@ def _backend_routes() -> tuple[set[str], set[str]]:
     return exact, prefixes
 
 
+def _js_modules() -> list[str]:
+    import os
+    static = os.path.join(os.path.dirname(__import__("aio").__file__), "static")
+    return [f for f in os.listdir(static) if f.endswith(".js")]
+
+
 def _js_endpoints() -> set[str]:
-    js = _asset("app.js")
+    js = "\n".join(_asset(name) for name in _js_modules())  # scan every ES module
     eps: set[str] = set()
     for raw in re.findall(r"""(?:fetch|EventSource)\(\s*[`'"]([^`'"]+)""", js):
         path = raw.split("?")[0].split("${")[0].rstrip("/")
