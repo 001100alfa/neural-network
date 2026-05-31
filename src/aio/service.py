@@ -177,6 +177,7 @@ class AgentService:
         # multiple concurrent conversations (tabs): id -> message history
         self.conversations: dict[str, list] = {"default": []}
         self._summaries: dict[str, str] = {}     # per-conversation compaction summary
+        self._store = None                       # lazily-opened SQLite session store
         self._active_conv = "default"
         self.plan_mode = False                   # read-only planning mode
         self._conv_agents: dict = {}             # per-conversation Agents (#5)
@@ -622,6 +623,16 @@ class AgentService:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
+    def _session_store(self):
+        """Lazily open the SQLite store, importing any legacy JSON once."""
+        if self._store is None:
+            from .store import SessionStore
+
+            sdir = self._sessions_dir()
+            self._store = SessionStore(sdir / "sessions.db")
+            self._store.migrate_legacy(sdir)
+        return self._store
+
     def save_session(self, title: str | None = None, session_id: str | None = None,
                      conv_id: str = "default") -> dict[str, Any]:
         import time
@@ -633,71 +644,28 @@ class AgentService:
                 first = next((m.content for m in msgs if m.role == "user" and m.content), "")
                 title = (first[:48] + "…") if len(first) > 48 else (first or "session")
             sid = session_id or f"{int(time.time() * 1000):x}"
-            payload = {
+            self._session_store().save({
                 "id": sid,
                 "title": title,
                 "provider": self.config.provider,
                 "model": self.config.active.model,
                 "updated": time.time(),
                 "messages": [_msg_to_dict(m) for m in msgs],
-            }
-            (self._sessions_dir() / f"{sid}.json").write_text(
-                json.dumps(payload, indent=2), encoding="utf-8"
-            )
+            })
             return {"ok": True, "id": sid, "title": title, "count": len(msgs)}
 
     def list_sessions(self) -> dict[str, Any]:
-        out = []
-        for f in self._sessions_dir().glob("*.json"):
-            try:
-                d = json.loads(f.read_text("utf-8"))
-            except (json.JSONDecodeError, OSError):
-                continue
-            out.append({
-                "id": d.get("id", f.stem),
-                "title": d.get("title", f.stem),
-                "provider": d.get("provider", ""),
-                "model": d.get("model", ""),
-                "updated": d.get("updated", f.stat().st_mtime),
-                "count": len(d.get("messages", [])),
-            })
-        out.sort(key=lambda s: s["updated"], reverse=True)
-        return {"sessions": out}
+        return {"sessions": self._session_store().list()}
 
     def search_sessions(self, query: str) -> dict[str, Any]:
         """Full-text search across saved sessions (title + message content)."""
-        q = (query or "").lower().strip()
-        if not q:
-            return {"results": []}
-        results = []
-        for f in self._sessions_dir().glob("*.json"):
-            try:
-                d = json.loads(f.read_text("utf-8"))
-            except (json.JSONDecodeError, OSError):
-                continue
-            hits = [m.get("content") or "" for m in d.get("messages", [])
-                    if q in (m.get("content") or "").lower()]
-            title_hit = q in (d.get("title", "") or "").lower()
-            if not hits and not title_hit:
-                continue
-            snippet = ""
-            if hits:
-                c = hits[0]
-                i = c.lower().find(q)
-                snippet = ("…" if i > 30 else "") + c[max(0, i - 30):i + 60]
-            results.append({
-                "id": d.get("id", f.stem), "title": d.get("title", f.stem),
-                "count": len(d.get("messages", [])), "matches": len(hits), "snippet": snippet,
-            })
-        results.sort(key=lambda r: r["matches"], reverse=True)
-        return {"results": results}
+        return {"results": self._session_store().search(query)}
 
     def load_session(self, session_id: str, conv_id: str = "default") -> dict[str, Any]:
         with self._lock:
-            f = self._sessions_dir() / f"{session_id}.json"
-            if not f.is_file():
+            d = self._session_store().get(session_id)
+            if d is None:
                 return {"ok": False, "error": "session not found"}
-            d = json.loads(f.read_text("utf-8"))
             conv_id = conv_id or "default"
             self.conversations[conv_id] = [_msg_from_dict(m) for m in d.get("messages", [])]
             self._select_conv(conv_id)
@@ -705,9 +673,7 @@ class AgentService:
                     "messages": d.get("messages", [])}
 
     def delete_session(self, session_id: str) -> dict[str, Any]:
-        f = self._sessions_dir() / f"{session_id}.json"
-        if f.is_file():
-            f.unlink()
+        self._session_store().delete(session_id)
         return {"ok": True}
 
     # -- export / import a conversation ----------------------------------
