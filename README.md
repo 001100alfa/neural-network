@@ -68,6 +68,11 @@ Requires Python **3.11+**.
 - **@file mentions** — `@path` in a message inlines that file's contents into
   the prompt (sandboxed to the working dir).
 - **Resume (CLI)** — `aio --continue` reopens your most recent CLI conversation.
+- **Web fetch** — a built-in `web_fetch` tool retrieves a URL and returns
+  readable text (HTML → plain text), stdlib-only.
+- **Background commands** — `run_background` starts a long-running command (dev
+  server, watcher, long build) without blocking; `check_background` reads its
+  output or stops it.
 - **Prompt caching** — on Anthropic, the (stable) system prompt and tool
   definitions are sent with `cache_control`, cutting cost/latency on repeated
   turns. On by default (`providers.<name>.cache = false` to disable).
