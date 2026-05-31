@@ -17,6 +17,10 @@ _DANGEROUS = [
     (re.compile(r"\bdd\b[^\n]*\bof=/dev/(sd|nvme|hd|disk)"), "raw write to a block device"),
     (re.compile(r">\s*/dev/(sd|nvme|hd|disk)\w*"), "redirect over a block device"),
     (re.compile(r"\b(shutdown|reboot|halt|poweroff)\b"), "host power/shutdown command"),
+    (re.compile(r"\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:ba)?sh\b"), "pipe remote script into a shell"),
+    (re.compile(r"\bchmod\s+(?:-[a-zA-Z]*\s+)*-?R[a-zA-Z]*\s+0*777\s+/(?:\s|$)"), "recursive world-writable on root"),
+    (re.compile(r"\bchown\s+(?:-[a-zA-Z]*\s+)*-?R[a-zA-Z]*\b[^\n]*\s/(?:\s|$)"), "recursive chown of root"),
+    (re.compile(r">\s*/etc/(passwd|shadow|sudoers)\b"), "overwrite a critical system file"),
 ]
 
 # Flag-order-independent detection for a recursive+forced delete of root/home.

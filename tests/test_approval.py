@@ -47,10 +47,10 @@ def test_broker_unknown_and_invalid():
 
 # -- EventUI.confirm --------------------------------------------------------
 
-def test_eventui_confirm_auto_approves_without_broker_or_sink():
-    assert EventUI().confirm("write_file", {}) == "yes"          # no broker
+def test_eventui_confirm_ungated_approves_but_gated_no_stream_denies():
+    assert EventUI().confirm("write_file", {}) == "yes"          # no broker -> not gated
     ui = EventUI(ApprovalBroker())
-    assert ui.confirm("write_file", {}) == "yes"                 # broker but no live sink
+    assert ui.confirm("write_file", {}) == "no"                  # gated, no live stream -> fail closed
 
 
 def test_eventui_confirm_gates_over_a_live_sink():

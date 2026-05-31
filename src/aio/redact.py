@@ -25,20 +25,27 @@ _ASSIGN = re.compile(
 )
 # Bare provider-key shapes: mask the whole match.
 _BARE = [
-    re.compile(r"\bsk-[A-Za-z0-9_\-]{6,}"),          # OpenAI / Anthropic
+    re.compile(r"\bsk-[A-Za-z0-9_\-]{6,}"),          # OpenAI / Anthropic (incl. sk-proj-)
     re.compile(r"\bgsk_[A-Za-z0-9]{6,}"),            # Groq
-    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{6,}"),    # Slack
+    re.compile(r"\bxox[baprse]-[A-Za-z0-9-]{6,}"),   # Slack bot/app/user
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"),     # GitHub
+    re.compile(r"\bglpat-[A-Za-z0-9_\-]{10,}"),      # GitLab personal access token
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),             # AWS access key id
+    re.compile(r"\bAIza[0-9A-Za-z_\-]{20,}"),        # Google API key
+    re.compile(r"\bya29\.[0-9A-Za-z_\-]{10,}"),      # Google OAuth token
+    re.compile(r"\bAccountKey=[A-Za-z0-9+/=]{20,}"),  # Azure storage
 ]
+# Whole private-key PEM blocks -> single placeholder.
+_PEM = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S)
 
 
 def redact(text: str) -> str:
     """Return ``text`` with secret-looking substrings masked."""
     if not text:
         return text
+    out = _PEM.sub("-----BEGIN PRIVATE KEY----- " + _MASK + " -----END PRIVATE KEY-----", text)
     out = _ASSIGN.sub(
-        lambda m: f"{m.group(1)}{m.group(2)}{m.group(3)}{_mask_token(m.group(4))}", text)
+        lambda m: f"{m.group(1)}{m.group(2)}{m.group(3)}{_mask_token(m.group(4))}", out)
     for pat in _BARE:
         out = pat.sub(lambda m: _mask_token(m.group(0)), out)
     return out

@@ -97,14 +97,21 @@ class EventUI:
         self._emit({"type": "diff", "path": path, "diff": diff})
 
     def confirm(self, name: str, args: dict) -> str:
-        # Without a broker, or with no live stream to ask over, we can't run an
-        # interactive prompt -> approve (the non-streaming fallback path).
-        if self._broker is None or self.sink is None:
+        # No broker at all -> not gated (CLI-less/tests): approve.
+        if self._broker is None:
             self.tool_call(name, args)
             return "yes"
-        # Gated: ask the browser and block this turn until it answers (or the
-        # broker times out, which denies). Read-only tools never reach here
-        # because they set needs_approval = False.
+        # Gated but no live stream to ask over (the non-streaming /api/chat
+        # fallback): fail closed — deny rather than silently auto-approve.
+        if self.sink is None:
+            self._emit({"type": "tool_result",
+                        "text": f"denied: '{name}' needs approval but this request "
+                                f"has no interactive stream. Use the streaming chat.",
+                        "error": True})
+            return "no"
+        # Gated with a live stream: ask the browser and block until it answers
+        # (or the broker times out, which denies). Read-only tools never reach
+        # here because they set needs_approval = False.
         rid = self._broker.open()
         self._emit({"type": "tool_approval", "id": rid, "name": name, "args": args})
         decision = self._broker.wait(rid)

@@ -61,26 +61,53 @@ class Metrics:
 
 
 class AuditLog:
-    """Append-only, secret-redacted record of tool executions (JSON lines)."""
+    """Append-only, secret-redacted, hash-chained record of tool executions.
 
-    def __init__(self, path) -> None:
+    Each JSON line carries ``prev`` = the SHA-256 of the previous line, so any
+    edit or truncation of the history is detectable. Rotates by size to bound
+    disk use (the chain restarts in the new file).
+    """
+
+    def __init__(self, path, max_bytes: int = 5_000_000) -> None:
+        import hashlib
         from pathlib import Path
 
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.max_bytes = max_bytes
         self._lock = threading.Lock()
+        self._hashlib = hashlib
+        self._prev = self._tail_hash()
+
+    def _tail_hash(self) -> str:
+        try:
+            last = b""
+            with open(self.path, "rb") as fh:
+                for raw in fh:
+                    if raw.strip():
+                        last = raw
+            return self._hashlib.sha256(last).hexdigest() if last else "genesis"
+        except OSError:
+            return "genesis"
 
     def record(self, name: str, args: dict, status: str, detail: str = "") -> None:
         from .redact import redact_obj
 
         entry = {
             "ts": round(time.time(), 3), "tool": name, "status": status,
-            "args": redact_obj(args), "detail": redact_obj(detail),
+            "args": redact_obj(args), "detail": redact_obj(detail), "prev": self._prev,
         }
-        line = json.dumps(entry, default=str) + "\n"
+        line = (json.dumps(entry, default=str) + "\n").encode("utf-8")
         try:
-            with self._lock, open(self.path, "a", encoding="utf-8") as fh:
-                fh.write(line)
+            with self._lock:
+                if self.path.exists() and self.path.stat().st_size + len(line) > self.max_bytes:
+                    self.path.replace(self.path.with_suffix(self.path.suffix + ".1"))
+                    self._prev = "genesis"
+                    entry["prev"] = "genesis"
+                    line = (json.dumps(entry, default=str) + "\n").encode("utf-8")
+                with open(self.path, "ab") as fh:
+                    fh.write(line)
+                self._prev = self._hashlib.sha256(line).hexdigest()
         except OSError:  # pragma: no cover - disk full / perms
             pass
 
