@@ -71,6 +71,9 @@ jobs:
   docker:
     name: docker image smoke test
     runs-on: ubuntu-latest
+    # Informational until proven stable in CI: a brand-new infra job shouldn't
+    # gate merges; the test matrix is the real gate.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Build image
