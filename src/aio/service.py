@@ -247,6 +247,7 @@ class AgentService(SessionsMixin, ProvidersMixin, PanelsMixin):
             hooks=hooks,
             auto_context=self.config.auto_context,
             auto_context_k=self.config.auto_context_results,
+            max_reflections=self.config.max_reflections,
         )
         agent.summary = summary
         agent.messages = messages
