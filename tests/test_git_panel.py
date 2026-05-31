@@ -40,7 +40,7 @@ def svc(tmp_path, monkeypatch):
 
 
 def test_branches_and_new_branch_and_switch(svc, tmp_path):
-    out = svc.git_action("new_branch", name="feature/x")["output"]
+    svc.git_action("new_branch", name="feature/x")
     # now on the new branch
     assert "feature/x" in svc.git_action("branches")["output"]
     cur = subprocess.run(["git", "branch", "--show-current"], cwd=tmp_path,
