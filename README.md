@@ -73,6 +73,9 @@ Requires Python **3.11+**.
 - **@file mentions** — `@path` in a message inlines that file's contents into
   the prompt (sandboxed to the working dir).
 - **Resume (CLI)** — `aio --continue` reopens your most recent CLI conversation.
+- **Full-screen TUI + vim mode** — `aio --tui` opens a curses full-screen
+  session; add `--vim` to start in NORMAL mode with modal editing (`h/j/k/l`,
+  `w`/`b`, `x`, `dd`/`dw`, `cc`/`cw`, `i`/`a`/`A`/`I`, Esc).
 - **Web fetch** — a built-in `web_fetch` tool retrieves a URL and returns
   readable text (HTML → plain text), stdlib-only.
 - **Background commands** — `run_background` starts a long-running command (dev
