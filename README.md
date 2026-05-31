@@ -191,6 +191,31 @@ run.bat                            :: uses the bundled python\
 launcher → `python` on `PATH`. The `python\` folder is git-ignored (it's a
 generated runtime, not source).
 
+## Portable Linux container (full toolchain + sandbox)
+
+Running natively on Windows works, but the agent then uses Windows tools and the
+POSIX **sandbox is disabled** (CPU/file-size caps are Linux-only). To give the
+agent a real Linux toolchain (`git`, `ripgrep`, build tools) **and** the
+sandbox, run it in a container that mounts *your* project at `/workspace`:
+
+```bash
+# from inside YOUR project folder
+./run-docker.sh                 # build (first run) + serve at http://localhost:8765
+./run-docker.sh -p ollama       # extra flags are forwarded to `aio`
+```
+
+```bat
+:: Windows 11 (needs Docker Desktop with the WSL2 backend)
+run-docker.bat
+```
+
+- Your project is bind-mounted read-write at `/workspace`; the agent operates on
+  it with full Linux tools and the resource sandbox active.
+- Provider keys present in your environment (`ANTHROPIC_API_KEY`, … ) are passed
+  through automatically; set `AIO_WEB_TOKEN` to pin the dashboard token.
+- Or use the raw command: `docker run --rm -it -p 8765:8765 -v "$PWD:/workspace"
+  -e ANTHROPIC_API_KEY=sk-... aio:local`.
+
 ## Quick start
 
 ```bash
