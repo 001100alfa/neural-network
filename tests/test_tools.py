@@ -76,10 +76,20 @@ def test_list_dir(ctx: ToolContext):
     assert "f.txt" in out
 
 
+def test_write_snapshots_for_rewind(ctx: ToolContext):
+    WriteFileTool().run({"path": "s.txt", "content": "one"}, ctx)
+    EditFileTool().run({"path": "s.txt", "old_string": "one", "new_string": "two"}, ctx)
+    # both mutations recorded a checkpoint; first had no prior file
+    assert len(ctx.checkpoints) == 2
+    assert ctx.checkpoints[0]["existed"] is False
+    assert ctx.checkpoints[1]["before"] == "one"
+
+
 def test_default_registry_has_expected_tools():
     reg = default_registry()
     names = set(reg.names())
-    assert {"read_file", "write_file", "edit_file", "grep", "glob", "run_shell", "git_commit"} <= names
+    assert {"read_file", "write_file", "edit_file", "grep", "glob", "run_shell",
+            "git_commit", "write_todos"} <= names
     # specs are well-formed
     for spec in reg.specs():
         assert "name" in spec and "parameters" in spec

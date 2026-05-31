@@ -78,6 +78,9 @@ class EventUI:
         if delta:
             self._emit({"type": "token", "text": delta})
 
+    def todos_update(self, todos: list) -> None:
+        self._emit({"type": "todos", "todos": todos})
+
     def tool_call(self, name: str, args: dict) -> None:
         self._emit({"type": "tool_call", "name": name, "args": args})
 
@@ -220,6 +223,8 @@ class AgentService:
         self._summaries: dict[str, str] = {}     # per-conversation compaction summary
         self._active_conv = "default"
         self.plan_mode = False                   # read-only planning mode
+        self._checkpoints: list = []             # file snapshots for rewind (#4)
+        self._todos: list = []                   # current task list (#7)
         # MCP servers + their tools (loaded once, registered on every rebuild)
         self._mcp_servers: list = []
         self._mcp_tools: list = []
@@ -236,6 +241,8 @@ class AgentService:
             ui=self.ui,
             auto_approve=True,  # web mode auto-approves tool calls
             allow_outside_workdir=self.config.allow_outside_workdir,
+            checkpoints=self._checkpoints,  # shared across rebuilds for rewind
+            todos=self._todos,
         )
         registry = default_registry()
         for tool in self._mcp_tools:
@@ -312,6 +319,47 @@ class AgentService:
             self._build_agent()
             return {"plan_mode": self.plan_mode}
 
+    # -- checkpoints / rewind (#4) and todos (#7) ------------------------
+    def checkpoints_info(self) -> dict[str, Any]:
+        cps = [
+            {"id": c["id"], "path": c["path"], "label": c["label"], "existed": c["existed"]}
+            for c in self._checkpoints
+        ]
+        return {"checkpoints": cps, "todos": self._todos}
+
+    def rewind(self, checkpoint_id: int | None = None) -> dict[str, Any]:
+        """Undo file changes back to (and including) ``checkpoint_id``.
+
+        With no id, undo only the most recent change. Restores each snapshot's
+        prior contents (or deletes files that did not exist before).
+        """
+        from pathlib import Path as _Path
+
+        with self._lock:
+            cps = self._checkpoints
+            if not cps:
+                return {"ok": False, "error": "nothing to rewind", **self.checkpoints_info()}
+            target = cps[-1]["id"] if checkpoint_id is None else int(checkpoint_id)
+            undone, kept = [], []
+            for c in reversed(cps):
+                if c["id"] < target:
+                    kept.append(c)
+                    continue
+                p = _Path(c["path"])
+                try:
+                    if c["existed"]:
+                        p.parent.mkdir(parents=True, exist_ok=True)
+                        p.write_text(c["before"] or "", encoding="utf-8")
+                    elif p.exists():
+                        p.unlink()
+                    undone.append(c["path"])
+                except OSError as exc:  # pragma: no cover - fs edge
+                    return {"ok": False, "error": f"{c['path']}: {exc}", **self.checkpoints_info()}
+            # keep only checkpoints below the target
+            self._checkpoints[:] = [c for c in cps if c["id"] < target]
+            self.agent.ctx.checkpoints = self._checkpoints
+            return {"ok": True, "undone": undone, **self.checkpoints_info()}
+
     def _select_conv(self, conv_id: str) -> None:
         """Point the agent at the message history for ``conv_id`` (multi-tab)."""
         conv_id = conv_id or "default"
@@ -329,6 +377,7 @@ class AgentService:
                 self.ui.error(str(exc))
                 final = ""
             self._summaries[self._active_conv] = self.agent.summary
+            self._todos = self.agent.ctx.todos
             self._accumulate_usage()
             return {"events": self.ui.drain(), "final": final, "usage": self.usage_info()}
 
@@ -350,6 +399,7 @@ class AgentService:
             finally:
                 self.ui.sink = None
             self._summaries[self._active_conv] = self.agent.summary
+            self._todos = self.agent.ctx.todos
             self._accumulate_usage()
             emit({"type": "done", "final": final, "usage": self.usage_info()})
 
@@ -878,6 +928,8 @@ def _make_handler(service: AgentService):
                 self._json(200, service.list_sessions())
             elif self.path == "/api/mcp":
                 self._json(200, service.mcp_info())
+            elif self.path == "/api/checkpoints":
+                self._json(200, service.checkpoints_info())
             elif self.path.startswith("/api/chat/stream"):
                 self._chat_stream()
             else:
@@ -939,6 +991,8 @@ def _make_handler(service: AgentService):
                     self._json(200, service.configure(payload.get("provider"), payload.get("model")))
                 elif self.path == "/api/plan":
                     self._json(200, service.set_plan_mode(bool(payload.get("on"))))
+                elif self.path == "/api/rewind":
+                    self._json(200, service.rewind(payload.get("id")))
                 elif self.path == "/api/providers":
                     self._json(200, service.set_provider_key(
                         payload.get("provider", ""),
@@ -1123,6 +1177,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
         background:var(--field);border:1px solid var(--border);border-radius:6px;padding:5px 8px;margin:8px 0}
   .usagebar b{color:var(--green)} .usagebar .bwarn{color:var(--red)}
   .sep{color:var(--border)}
+  #planBtn.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .membadge{display:none;font-size:13px} .membadge.on{display:inline}
+  .todobar{display:none;flex-direction:column;gap:3px;margin:8px 18px 0;padding:8px 10px;
+        background:var(--panel);border:1px solid var(--border);border-radius:8px;font-size:12.5px}
+  .todobar.on{display:flex}
+  .todobar .t{display:flex;gap:7px;align-items:baseline}
+  .todobar .done{color:var(--muted);text-decoration:line-through}
+  .todobar .cur{color:var(--accent)}
   /* conversation tabs */
   .convtabs{display:flex;gap:4px;padding:8px 8px 0;overflow-x:auto;background:var(--bg);align-items:center}
   .convtabs .ctab{display:flex;align-items:center;gap:6px;padding:5px 10px;border:1px solid var(--border);
@@ -1220,6 +1282,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <button id="importBtn" title="import a JSON conversation">Import</button>
     <input id="importInput" type="file" accept="application/json,.json" style="display:none"/>
     <button id="planBtn" title="plan mode — read-only; produce a plan, change nothing">Plan</button>
+    <button id="rewindBtn" title="undo the agent's last file change">↶ Rewind</button>
     <span id="memBadge" class="membadge" title="project memory loaded (CLAUDE.md/AGENTS.md)">🧠</span>
     <button id="gearBtn" title="settings">⚙</button>
   </div>
@@ -1241,6 +1304,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
   </aside>
   <main>
     <div id="convTabs" class="convtabs"></div>
+    <div id="todoBar" class="todobar"></div>
     <div id="log"></div>
     <div id="attachBar" class="attachbar"></div>
     <footer>
@@ -1382,9 +1446,21 @@ function appendToken(t){
 }
 function endStream(){ curStream=null; }
 
+function renderTodos(todos){
+  const bar=document.getElementById('todoBar'); bar.innerHTML='';
+  if(!todos || !todos.length){ bar.classList.remove('on'); return; }
+  todos.forEach(t=>{ const row=el('t');
+    const mark=t.status==='completed'?'✔':(t.status==='in_progress'?'▶':'○');
+    const s=document.createElement('span'); s.className='s'; s.textContent=mark;
+    const c=document.createElement('span');
+    c.className=t.status==='completed'?'done':(t.status==='in_progress'?'cur':'');
+    c.textContent=t.content; row.appendChild(s); row.appendChild(c); bar.appendChild(row); });
+  bar.classList.add('on');
+}
 function addEvent(ev){
   if(ev.type==='thinking'){ return; }
   if(ev.type==='token'){ appendToken(ev.text); return; }
+  if(ev.type==='todos'){ renderTodos(ev.todos); return; }
   endStream();  // any non-token event finalises the streamed bubble
   if(ev.type==='assistant'){ addMsg('assistant', ev.text); return; }
   if(ev.type==='tool_call'){
@@ -1431,6 +1507,17 @@ document.getElementById('planBtn').onclick=async()=>{
   await fetch('/api/plan',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({on})});
   loadInfo();
+};
+document.getElementById('rewindBtn').onclick=async()=>{
+  const r=await fetch('/api/checkpoints'); const d=await r.json();
+  if(!(d.checkpoints||[]).length){ sysMsg('nothing to rewind'); return; }
+  const last=d.checkpoints[d.checkpoints.length-1];
+  if(!confirm('Undo last change to '+last.path+'?')) return;
+  const rr=await fetch('/api/rewind',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  const rd=await rr.json();
+  if(rd.ok){ sysMsg('rewound: '+(rd.undone||[]).join(', '));
+    loadTree(); if(window.__edRefresh) window.__edRefresh(); }
+  else sysMsg('rewind: '+(rd.error||'failed'));
 };
 
 // ---- conversation tabs (multiple concurrent chats) ----

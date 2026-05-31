@@ -23,6 +23,29 @@ class ToolContext:
     allow_outside_workdir: bool = False
     # tool names that have been granted "always allow" for this session
     approved: set[str] = field(default_factory=set)
+    # file snapshots taken before mutating edits, for rewind/undo (#4)
+    checkpoints: list[dict] = field(default_factory=list)
+    # the agent's current task list (#7 TodoWrite)
+    todos: list[dict] = field(default_factory=list)
+
+    def snapshot(self, path: "Path", label: str) -> None:
+        """Record the pre-edit contents of ``path`` so the change can be undone."""
+        import time as _time
+
+        before = None
+        try:
+            if path.is_file():
+                before = path.read_text("utf-8")
+        except (OSError, UnicodeDecodeError):
+            before = None
+        self.checkpoints.append({
+            "id": len(self.checkpoints) + 1,
+            "path": str(path),
+            "before": before,        # None => file did not exist (undo = delete)
+            "existed": before is not None,
+            "label": label,
+            "ts": _time.time(),
+        })
 
     def safe_path(self, path: str) -> Path:
         """Resolve ``path`` against the workdir and guard against escaping it."""
@@ -103,6 +126,7 @@ def default_registry() -> ToolRegistry:
     from .git import GitCommitTool, GitDiffTool, GitStatusTool
     from .search import GlobTool, GrepTool
     from .shell import RunShellTool
+    from .todos import WriteTodosTool
 
     return ToolRegistry(
         [
@@ -116,6 +140,7 @@ def default_registry() -> ToolRegistry:
             GitStatusTool(),
             GitDiffTool(),
             GitCommitTool(),
+            WriteTodosTool(),
         ]
     )
 

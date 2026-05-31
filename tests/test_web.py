@@ -91,6 +91,43 @@ def test_plan_mode_and_memory(tmp_path, monkeypatch):
     assert svc.agent.plan_mode is False
 
 
+def test_rewind_undoes_edits(tmp_path, monkeypatch):
+    from aio.tools.files import EditFileTool, WriteFileTool
+
+    svc = _service(tmp_path, monkeypatch)
+    ctx = svc.agent.ctx
+    WriteFileTool().run({"path": "a.txt", "content": "v1"}, ctx)
+    EditFileTool().run({"path": "a.txt", "old_string": "v1", "new_string": "v2"}, ctx)
+    assert (tmp_path / "a.txt").read_text() == "v2"
+    assert len(svc.checkpoints_info()["checkpoints"]) == 2
+
+    svc.rewind()  # undo last edit -> v1
+    assert (tmp_path / "a.txt").read_text() == "v1"
+    assert len(svc.checkpoints_info()["checkpoints"]) == 1
+
+    svc.rewind(checkpoint_id=1)  # undo the create -> file removed (didn't exist before)
+    assert not (tmp_path / "a.txt").exists()
+    assert svc.checkpoints_info()["checkpoints"] == []
+    assert svc.rewind()["ok"] is False  # nothing left
+
+
+def test_write_todos_tool(tmp_path, monkeypatch):
+    from aio.tools.todos import WriteTodosTool
+
+    svc = _service(tmp_path, monkeypatch)
+    out = WriteTodosTool().run(
+        {"todos": [{"content": "a", "status": "completed"},
+                   {"content": "b", "status": "in_progress"}]},
+        svc.agent.ctx,
+    )
+    assert "1/2" in out
+    assert svc.agent.ctx.todos[1]["content"] == "b"
+    # invalid status rejected
+    import pytest as _pt
+    with _pt.raises(Exception):
+        WriteTodosTool().run({"todos": [{"content": "x", "status": "bogus"}]}, svc.agent.ctx)
+
+
 def test_conversations_are_isolated(tmp_path, monkeypatch):
     svc = _service(tmp_path, monkeypatch)
 

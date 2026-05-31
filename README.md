@@ -46,6 +46,23 @@ pip install -e .
 
 Requires Python **3.11+**.
 
+## Agent behaviour (Claude Code-style)
+
+- **Project memory** — `CLAUDE.md`, `AGENTS.md` or `.aio.md` in the working
+  directory (and a global `~/.config/aio/CLAUDE.md`) are auto-loaded into the
+  system prompt; a 🧠 badge in the dashboard shows when memory is active.
+- **Context compaction** — long conversations are summarised automatically as
+  they approach the context limit (recent turns kept verbatim) so sessions don't
+  overflow the model's context window.
+- **Plan mode** — read-only planning: the agent may only inspect
+  (read/grep/git status·diff) and must produce a plan without changing anything.
+  Toggle **Plan** in the dashboard or run the CLI with `--plan`.
+- **Checkpoints / rewind** — every `write_file`/`edit_file` snapshots the file
+  first, so the dashboard's **↶ Rewind** button undoes the agent's last change
+  (restoring prior contents, or deleting files it created).
+- **Task list** — a `write_todos` tool lets the agent plan and track multi-step
+  work; the current checklist shows above the chat.
+
 ## Portable — run on Windows 11 (no install)
 
 Because AIO has **zero runtime dependencies** (pure Python standard library), it
