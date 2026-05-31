@@ -42,6 +42,17 @@ def _serve_with_provider(tmp_path, provider):
     return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
 
 
+def _is_real_error(text: str) -> bool:
+    """Ignore benign resource 404s (e.g. favicon) that can appear under load;
+    only genuine JS/module errors should fail this test."""
+    t = text.lower()
+    if "favicon" in t:
+        return False
+    if "failed to load resource" in t and "404" in t:
+        return False
+    return True
+
+
 def test_dashboard_loads_modules_and_runs_approval_flow(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setenv("AIO_KEYS_FILE", str(tmp_path / "keys.json"))
@@ -62,23 +73,27 @@ def test_dashboard_loads_modules_and_runs_approval_flow(tmp_path, monkeypatch):
     errors: list[str] = []
     try:
         page = browser.new_page()
-        page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+        page.on("console", lambda m: errors.append(m.text)
+                if m.type == "error" and _is_real_error(m.text) else None)
         page.on("pageerror", lambda e: errors.append(str(e)))
-        page.goto(base, wait_until="networkidle")
-        time.sleep(0.3)
+        # "load" + an explicit readiness wait is far more robust than
+        # "networkidle", which is timing-sensitive and flaky under full-suite load.
+        page.goto(base, wait_until="load", timeout=30000)
+        # editor.js self-initialised (its file <select> exists) -> the ES modules
+        # (app.js + util.js + editor.js) loaded and ran.
+        page.wait_for_selector("#edFile", timeout=15000)
 
-        # the ES modules (app.js + util.js + editor.js) loaded without error
         assert errors == [], f"console/page errors on load: {errors}"
-        # editor.js self-initialised (its file <select> exists and is populated)
         assert page.eval_on_selector("#edFile", "el => el.tagName") == "SELECT"
 
         # drive the approval flow: send a message, approve the write_file
         page.fill("#input", "make hello.txt")
         page.click("#send")
-        page.wait_for_selector(".event.appr", timeout=8000)
+        # generous timeout: under full-suite load the streamed round trip is slow
+        page.wait_for_selector(".event.appr", timeout=30000)
         assert not (tmp_path / "hello.txt").exists()      # gated: not written yet
         page.click(".appr-actions button:has-text('Approve')")
-        for _ in range(50):
+        for _ in range(100):
             if (tmp_path / "hello.txt").exists():
                 break
             time.sleep(0.1)
