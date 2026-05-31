@@ -106,6 +106,9 @@ filename and content; run shell commands; and use git. Guidelines:
 - For file management use the dedicated tools (make_dir, move_path, copy_path, \
   delete_path, archive) — they are platform-independent and safer than shell \
   mv/rm/cp; move/delete of a single file is rewindable.
+- To PROVE a web UI works, run it (run_shell/run_background) then capture a \
+  screenshot of its URL to give the user visual evidence — verify by tests AND \
+  a screenshot when a change is visual.
 - edit_file matches old_string EXACTLY, including whitespace. If an edit fails, \
   re-read the file and copy the exact text (the error often points at the cause, \
   e.g. an indentation difference) — do not guess the same string twice.

@@ -22,6 +22,9 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "pyflakes>=3", "mypy>=1.8", "coverage>=7"]
+# Optional: visual proof (the `screenshot` tool). AIO has zero REQUIRED deps;
+# install with `pip install aio-coding-agent[proof]` then `playwright install chromium`.
+proof = ["playwright>=1.40"]
 
 [project.urls]
 Homepage = "https://github.com/001100alfa/neural-network"
