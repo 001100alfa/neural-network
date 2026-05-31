@@ -52,6 +52,8 @@ class Agent:
         self.compact_keep = 6  # recent messages kept verbatim during compaction
         self._token_factor = 1.0   # self-calibration multiplier for token estimates (#1)
         self._last_raw_estimate = 0
+        import threading
+        self._usage_lock = threading.Lock()  # guards run_usage under parallel sub-agents
         self.plan_mode = plan_mode
         self.messages: list[Message] = []
         #: running summary of compacted (older) messages, fed via the system prompt
@@ -87,9 +89,11 @@ class Agent:
             hooks=self.hooks,
         )
         result = child.run(prompt)
-        # roll the sub-agent's token usage into the parent's tally
-        for k in ("requests", "input_tokens", "output_tokens", "cache_read", "cache_write"):
-            self.run_usage[k] = self.run_usage.get(k, 0) + child.run_usage.get(k, 0)
+        # roll the sub-agent's token usage into the parent's tally (thread-safe:
+        # parallel_tasks may run several sub-agents concurrently)
+        with self._usage_lock:
+            for k in ("requests", "input_tokens", "output_tokens", "cache_read", "cache_write"):
+                self.run_usage[k] = self.run_usage.get(k, 0) + child.run_usage.get(k, 0)
         return result or "(sub-agent finished with no summary)"
 
     def reset(self) -> None:

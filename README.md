@@ -109,7 +109,8 @@ Requires Python **3.11+**.
   `reasoning_effort`).
 - **Sub-agents** — a `task` tool delegates a self-contained job to a fresh agent
   with its own clean context (same tools/provider), returning only its summary —
-  keeps the main context small for big tasks.
+  keeps the main context small for big tasks. `parallel_tasks` runs several
+  **independent** sub-agents **concurrently** and returns all results.
 - **Hooks** — run shell commands around tool calls. Configure in `.aio.toml`:
 
   ```toml

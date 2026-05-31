@@ -141,7 +141,7 @@ def default_registry() -> ToolRegistry:
     from .search import GlobTool, GrepTool
     from .background import CheckBackgroundTool, RunBackgroundTool
     from .shell import RunShellTool
-    from .task import TaskTool
+    from .task import ParallelTasksTool, TaskTool
     from .todos import WriteTodosTool
     from .web import WebFetchTool
 
@@ -159,6 +159,7 @@ def default_registry() -> ToolRegistry:
             GitCommitTool(),
             WriteTodosTool(),
             TaskTool(),
+            ParallelTasksTool(),
             WebFetchTool(),
             RunBackgroundTool(),
             CheckBackgroundTool(),
