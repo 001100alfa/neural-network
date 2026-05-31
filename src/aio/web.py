@@ -21,7 +21,9 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from . import __version__
 from .config import Config
+from .obs import API_VERSION, Metrics, log_event
 from .providers import ProviderError
 from .security import WebGuard, loopback_allowlist, new_token
 from .service import AgentService, EventUI, _extract_doc_text
@@ -32,21 +34,30 @@ from .web_ui import static_asset
 __all__ = ["AgentService", "EventUI", "_extract_doc_text", "serve"]
 
 
-def _make_handler(service: AgentService, guard: "WebGuard | None" = None):
+def _make_handler(service: AgentService, guard: "WebGuard | None" = None,
+                  metrics: "Metrics | None" = None):
     # No guard supplied -> a fully permissive one (auth/host/rate checks off).
     active_guard = guard or WebGuard(token=None, allowed_hosts=None)
+    active_metrics = metrics or Metrics()
 
     class Handler(BaseHTTPRequestHandler):
         _cookie: str | None = None
 
-        def log_message(self, *_a):  # silence default stderr logging
+        def log_message(self, *_a):  # default stderr logging -> structured logs below
             pass
 
         def _security_headers(self) -> None:
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("X-Frame-Options", "DENY")
+            self.send_header("X-AIO-API-Version", API_VERSION)
             if self._cookie:
                 self.send_header("Set-Cookie", self._cookie)
+
+        def _observe(self, code: int) -> None:
+            active_metrics.record(code)
+            log_event("info" if code < 400 else "warn",
+                      event="http", method=self.command, path=self.path.split("?")[0],
+                      status=code, client=self.client_address[0] if self.client_address else "?")
 
         def _preflight(self) -> bool:
             """Host / rate / token checks; writes the error response on failure."""
@@ -74,6 +85,7 @@ def _make_handler(service: AgentService, guard: "WebGuard | None" = None):
             self._security_headers()
             self.end_headers()
             self.wfile.write(body)
+            self._observe(code)
 
         def _json(self, code: int, obj: Any) -> None:
             self._send(code, json.dumps(obj).encode("utf-8"), "application/json")
@@ -84,7 +96,30 @@ def _make_handler(service: AgentService, guard: "WebGuard | None" = None):
                 return {}
             return json.loads(self.rfile.read(length).decode("utf-8"))
 
+        def _operational(self) -> bool:
+            """Unauthenticated liveness/metrics endpoints (still host+rate gated)."""
+            path = self.path.split("?")[0]
+            if path not in ("/health", "/metrics", "/api/version"):
+                return False
+            if not active_guard.host_ok(self.headers.get("Host")):
+                self._json(403, {"error": "forbidden: unexpected Host header"})
+                return True
+            if path == "/metrics":
+                extra = {
+                    "conversations": float(len(service.conversations)),
+                    "tokens_input_total": float(service.usage.get("input_tokens", 0)),
+                    "tokens_output_total": float(service.usage.get("output_tokens", 0)),
+                }
+                self._send(200, active_metrics.prometheus(extra).encode("utf-8"),
+                           "text/plain; version=0.0.4; charset=utf-8")
+            else:
+                self._json(200, {"status": "ok", "version": __version__,
+                                 "api_version": API_VERSION, "uptime_s": round(active_metrics.uptime_s(), 1)})
+            return True
+
         def do_GET(self):  # noqa: N802
+            if self._operational():
+                return
             if not self._preflight():
                 return
             asset = static_asset(self.path.split("?")[0])
@@ -256,7 +291,8 @@ def serve(
     exposed = host in ("0.0.0.0", "::", "")
     allowed = None if exposed else loopback_allowlist() | {host.lower()}
     guard = WebGuard(token, allowed)
-    httpd = ThreadingHTTPServer((host, port), _make_handler(service, guard))
+    metrics = Metrics()
+    httpd = ThreadingHTTPServer((host, port), _make_handler(service, guard, metrics))
 
     browse_host = "localhost" if exposed else host
     url = f"http://{browse_host}:{port}"
