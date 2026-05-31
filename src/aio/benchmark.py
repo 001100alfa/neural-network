@@ -37,10 +37,14 @@ def compare(baseline: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]
     """Diff two scorecards: per-case regressions / fixes and pass-rate delta."""
     base, cur = _case_map(baseline), _case_map(current)
     names = sorted(set(base) | set(cur))
-    regressed = [n for n in names if base.get(n) and not cur.get(n)]
-    fixed = [n for n in names if cur.get(n) and not base.get(n)]
     added = [n for n in names if n in cur and n not in base]
     removed = [n for n in names if n in base and n not in cur]
+    # regressed/fixed only cover cases present in BOTH runs whose status flipped;
+    # brand-new or dropped cases are reported separately (added/removed) so a new
+    # failing case isn't mistaken for a regression.
+    shared = [n for n in names if n in base and n in cur]
+    regressed = [n for n in shared if base[n] and not cur[n]]
+    fixed = [n for n in shared if cur[n] and not base[n]]
     return {
         "baseline_pass_rate": baseline.get("pass_rate"),
         "current_pass_rate": current.get("pass_rate"),

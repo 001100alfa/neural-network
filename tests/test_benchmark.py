@@ -36,8 +36,19 @@ def test_compare_detects_fix_and_new_cases():
     cur = {"pass_rate": 1.0, "cases": [{"name": "a", "passed": True},
                                        {"name": "b", "passed": True}]}
     d = compare(base, cur)
+    # 'a' existed and flipped False->True -> fixed; 'b' is brand-new -> added only
     assert d["fixed"] == ["a"] and d["added"] == ["b"]
+    assert "b" not in d["fixed"]                    # a new case is not a "fix"
     assert d["delta"] == 0.5 and d["ok"] is True   # no regression -> ok
+
+
+def test_compare_new_failing_case_is_not_a_regression():
+    # a brand-new case that fails must NOT be flagged as a regression
+    base = {"pass_rate": 1.0, "cases": [{"name": "a", "passed": True}]}
+    cur = {"pass_rate": 0.5, "cases": [{"name": "a", "passed": True},
+                                       {"name": "b", "passed": False}]}
+    d = compare(base, cur)
+    assert d["regressed"] == [] and d["added"] == ["b"] and d["ok"] is True
 
 
 def test_compare_clean_run_is_ok():
