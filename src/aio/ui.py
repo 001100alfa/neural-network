@@ -108,6 +108,22 @@ class UI:
             return "yes"
         return "no"
 
+    def confirm_hunk(self, path: str, index: int, total: int, hunk_lines: list[str]) -> bool:
+        """Show one diff hunk and ask whether to apply it. Returns True to keep."""
+        print(self._c(f"  hunk {index}/{total} in {path}:", Color.CYAN))
+        for line in hunk_lines:
+            if line.startswith("+"):
+                print(self._c("   " + line, Color.GREEN))
+            elif line.startswith("-"):
+                print(self._c("   " + line, Color.RED))
+            else:
+                print(self._c("   " + line, Color.GREY))
+        try:
+            ans = input(self._c("  apply this hunk? [y]es / [n]o: ", Color.YELLOW)).strip().lower()
+        except EOFError:
+            return True
+        return ans in ("", "y", "yes")
+
 
 def _short(value, limit: int = 60) -> str:
     s = str(value).replace("\n", "\\n")

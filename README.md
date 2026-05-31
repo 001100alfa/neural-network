@@ -84,6 +84,11 @@ Requires Python **3.11+**.
   git_commit = "deny"     # always blocked
   "*" = "ask"             # default
   ```
+- **Headless / JSON output** — `aio --output-format json "task"` runs once and
+  prints a single structured result (`{ok, result, error, usage, events}`) for
+  scripting/CI.
+- **Per-hunk diff approval** — `aio --diff-approve` approves each edit hunk
+  individually; only accepted hunks are written.
 - **Prompt caching** — on Anthropic, the (stable) system prompt and tool
   definitions are sent with `cache_control`, cutting cost/latency on repeated
   turns. On by default (`providers.<name>.cache = false` to disable).

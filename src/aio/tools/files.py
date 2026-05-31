@@ -2,11 +2,61 @@
 
 from __future__ import annotations
 
+import difflib
 from typing import Any
 
 from .base import Tool, ToolContext, ToolError, _relpath
 
 MAX_READ_BYTES = 400_000
+
+
+def _apply_selected_hunks(old: str, new: str, ctx: ToolContext, path: str) -> tuple[str, int, int]:
+    """Ask the UI per hunk; rebuild text keeping only accepted hunks.
+
+    Returns (result_text, kept, total). Falls back to ``new`` if the UI can't
+    prompt per hunk.
+    """
+    old_lines = old.splitlines(keepends=True)
+    new_lines = new.splitlines(keepends=True)
+    sm = difflib.SequenceMatcher(a=old_lines, b=new_lines)
+    groups = [g for g in sm.get_grouped_opcodes(1)]
+    if not groups or not hasattr(ctx.ui, "confirm_hunk"):
+        return new, 0, 0
+    # decide each changed group
+    keep = {}
+    for i, group in enumerate(groups, start=1):
+        preview = []
+        for tag, a1, a2, b1, b2 in group:
+            if tag in ("delete", "replace"):
+                preview += ["-" + ln.rstrip("\n") for ln in old_lines[a1:a2]]
+            if tag in ("insert", "replace"):
+                preview += ["+" + ln.rstrip("\n") for ln in new_lines[b1:b2]]
+            if tag == "equal":
+                preview += [" " + ln.rstrip("\n") for ln in old_lines[a1:a2]]
+        keep[i] = ctx.ui.confirm_hunk(path, i, len(groups), preview)
+    # rebuild: walk full opcodes, applying changed spans only when accepted
+    result, gi = [], 0
+    changed_spans = []
+    for group in groups:
+        gi += 1
+        a_start = group[0][1]
+        a_end = group[-1][2]
+        changed_spans.append((a_start, a_end, gi, group))
+    cursor = 0
+    for a_start, a_end, gi, group in changed_spans:
+        result.extend(old_lines[cursor:a_start])  # unchanged context before
+        if keep.get(gi):
+            for tag, a1, a2, b1, b2 in group:
+                if tag == "equal":
+                    result.extend(old_lines[a1:a2])
+                else:
+                    result.extend(new_lines[b1:b2])
+        else:
+            result.extend(old_lines[a_start:a_end])  # reject -> keep original
+        cursor = a_end
+    result.extend(old_lines[cursor:])
+    kept = sum(1 for v in keep.values() if v)
+    return "".join(result), kept, len(groups)
 
 
 class ReadFileTool(Tool):
@@ -108,12 +158,19 @@ class EditFileTool(Tool):
                 f"Add more context or set replace_all=true."
             )
         new_text = text.replace(old_string, new_string) if replace_all else text.replace(old_string, new_string, 1)
+        note = ""
+        if ctx.per_hunk:
+            new_text, kept, total = _apply_selected_hunks(text, new_text, ctx, _relpath(p, ctx))
+            if total:
+                note = f" ({kept}/{total} hunks applied)"
+            if new_text == text:
+                return f"No hunks applied to {_relpath(p, ctx)}."
         if ctx.ui is not None:
             ctx.ui.show_diff(text, new_text, _relpath(p, ctx))
         ctx.snapshot(p, f"edit_file {_relpath(p, ctx)}")
         p.write_text(new_text, encoding="utf-8")
         n = count if replace_all else 1
-        return f"Edited {_relpath(p, ctx)} ({n} replacement{'s' if n != 1 else ''})."
+        return f"Edited {_relpath(p, ctx)} ({n} replacement{'s' if n != 1 else ''}){note}."
 
 
 class ListDirTool(Tool):
