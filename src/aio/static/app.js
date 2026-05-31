@@ -89,6 +89,13 @@ function renderApproval(ev){
   act.appendChild(mk('Deny','no'));
   wrap.appendChild(act); log.appendChild(wrap); scroll();
 }
+async function loadHealth(){
+  try{
+    const h=await (await fetch('/health')).json();
+    const el=document.getElementById('ver');
+    if(el) el.textContent='v'+h.version+' · up '+Math.round(h.uptime_s)+'s';
+  }catch(_){}
+}
 async function loadInfo(){
   const r=await fetch('/api/info'); const d=await r.json();
   document.getElementById('provider').textContent=d.provider;
@@ -618,3 +625,4 @@ if(provTabBtn) provTabBtn.addEventListener('click', loadProviders);
 loadProviders();
 
 loadInfo();
+loadHealth();
