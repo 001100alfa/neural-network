@@ -236,6 +236,7 @@ class AgentService:
         self.config = config
         self.ui = EventUI()
         self._lock = threading.Lock()
+        self._usage_lock = threading.Lock()  # guards self.usage across concurrent chats
         # API keys entered via the dashboard are persisted here and overlaid on
         # top of env/config so they survive restarts.
         self.keys = KeyStore.load()
@@ -251,6 +252,8 @@ class AgentService:
         self._summaries: dict[str, str] = {}     # per-conversation compaction summary
         self._active_conv = "default"
         self.plan_mode = False                   # read-only planning mode
+        self._conv_agents: dict = {}             # per-conversation Agents (#5)
+        self._conv_locks: dict = {}              # per-conversation locks (#5)
         self._checkpoints: list = []             # file snapshots for rewind (#4)
         self._todos: list = []                   # current task list (#7)
         # MCP servers + their tools (loaded once, registered on every rebuild)
@@ -263,41 +266,73 @@ class AgentService:
         self._static_port: int | None = None
         self._reload_mcp()  # also builds the agent
 
-    def _build_agent(self) -> None:
+    def _make_agent_for(self, ui, messages, summary: str = "", provider=None) -> Agent:
+        """Build a fresh Agent bound to a specific UI + message history.
+
+        Used per conversation so independent chats can run concurrently without
+        sharing one agent/UI. Cross-conversation state (checkpoints, todos, MCP
+        tools, permissions) is still wired in. ``provider`` may be supplied to
+        share an already-built/overridden provider across conversations."""
+        from .config import OUTPUT_STYLES
+        from .hooks import HookRunner
+
         ctx = ToolContext(
             workdir=self.config.workdir,
-            ui=self.ui,
+            ui=ui,
             auto_approve=True,  # web mode auto-approves tool calls
             allow_outside_workdir=self.config.allow_outside_workdir,
-            checkpoints=self._checkpoints,  # shared across rebuilds for rewind
+            checkpoints=self._checkpoints,
             todos=self._todos,
-            permissions=dict(self.config.permissions),  # deny still applies in web mode
+            permissions=dict(self.config.permissions),
         )
         registry = default_registry()
         for tool in self._mcp_tools:
             registry.register(tool)
-        from .config import OUTPUT_STYLES
-
         system_prompt = self.config.system_prompt + OUTPUT_STYLES.get(self.config.output_style, "")
         if self.config.project_memory:
             system_prompt += "\n\n# Project memory (CLAUDE.md / AGENTS.md)\n" + self.config.project_memory
-        from .hooks import HookRunner
-
         hooks = HookRunner(self.keys.data.get("hooks") or self.config.hooks, self.config.workdir)
-        self.agent = Agent(
-            provider=build_provider(self.config),
+        agent = Agent(
+            provider=provider or build_provider(self.config),
             tools=registry,
             ctx=ctx,
-            ui=self.ui,
+            ui=ui,
             system_prompt=system_prompt,
             max_steps=self.config.max_steps,
-            stream=True,  # web chat streams token-by-token over SSE
+            stream=True,
             plan_mode=self.plan_mode,
             hooks=hooks,
         )
-        # carry the running summary across rebuilds, attach the active history
-        self.agent.summary = self._summaries.get(self._active_conv, "")
-        self.agent.messages = self.conversations.setdefault(self._active_conv, [])
+        agent.summary = summary
+        agent.messages = messages
+        return agent
+
+    def _build_agent(self) -> None:
+        """Rebuild agents after a global settings change; drop per-conv cache.
+
+        ``self.agent``/``self.ui`` stay bound to the active conversation for the
+        single-agent code paths (info, sessions, rewind, todos)."""
+        self._conv_agents = {}   # conv_id -> Agent (lazy per conversation)
+        msgs = self.conversations.setdefault(self._active_conv, [])
+        self.agent = self._make_agent_for(self.ui, msgs,
+                                          self._summaries.get(self._active_conv, ""))
+        self._conv_agents[self._active_conv] = self.agent
+
+    def _agent_for_conv(self, conv_id: str):
+        """Return (agent, ui, lock) for a conversation, creating them on demand."""
+        conv_id = conv_id or "default"
+        msgs = self.conversations.setdefault(conv_id, [])
+        agent = self._conv_agents.get(conv_id)
+        if agent is None:
+            # share the default agent's (possibly overridden) provider
+            prov = getattr(getattr(self, "agent", None), "provider", None)
+            agent = self._make_agent_for(EventUI(), msgs, self._summaries.get(conv_id, ""), provider=prov)
+            self._conv_agents[conv_id] = agent
+        else:
+            agent.messages = msgs
+            agent.summary = self._summaries.get(conv_id, "")
+        lock = self._conv_locks.setdefault(conv_id, threading.Lock())
+        return agent, agent.ui, lock
 
     # -- MCP servers (web mode) ------------------------------------------
     def _mcp_configs(self) -> list[dict]:
@@ -415,11 +450,20 @@ class AgentService:
             return {"ok": True, "undone": undone, **self.checkpoints_info()}
 
     def _select_conv(self, conv_id: str) -> None:
-        """Point the agent at the message history for ``conv_id`` (multi-tab)."""
+        """Make ``conv_id`` active for the single-agent paths (sessions, rewind…).
+
+        Points the default ``self.agent`` at that conversation's history and, if
+        a dedicated per-conversation agent exists, keeps it in sync too."""
         conv_id = conv_id or "default"
-        self.agent.messages = self.conversations.setdefault(conv_id, [])
-        self.agent.summary = self._summaries.get(conv_id, "")
+        msgs = self.conversations.setdefault(conv_id, [])
+        summ = self._summaries.get(conv_id, "")
+        self.agent.messages = msgs
+        self.agent.summary = summ
         self._active_conv = conv_id
+        cached = self._conv_agents.get(conv_id)
+        if cached is not None and cached is not self.agent:
+            cached.messages = msgs
+            cached.summary = summ
 
     def _preprocess(self, message: str) -> str:
         """Expand a custom /command and any @file mentions before sending."""
@@ -456,45 +500,50 @@ class AgentService:
         return message + "".join(blocks)
 
     def chat(self, message: str, images=None, conv_id: str = "default", files=None) -> dict[str, Any]:
+        # Build config-derived state under the global lock, then run the turn
+        # under the per-conversation lock so other conversations aren't blocked.
         with self._lock:
-            self._select_conv(conv_id)
             message = self._inline_files(self._preprocess(message), files)
-            self.ui.drain()
+            agent, ui, conv_lock = self._agent_for_conv(conv_id)
+        with conv_lock:
+            ui.drain()
             try:
-                final = self.agent.run(message, images=images)
+                final = agent.run(message, images=images)
             except ProviderError as exc:
-                self.ui.error(str(exc))
+                ui.error(str(exc))
                 final = ""
-            self._summaries[self._active_conv] = self.agent.summary
-            self._todos = self.agent.ctx.todos
-            self._accumulate_usage()
-            return {"events": self.ui.drain(), "final": final, "usage": self.usage_info()}
+            self._summaries[conv_id or "default"] = agent.summary
+            self._todos = agent.ctx.todos
+            self._accumulate_usage(agent)
+            return {"events": ui.drain(), "final": final, "usage": self.usage_info()}
 
     def chat_stream(self, message: str, emit, images=None, conv_id: str = "default", files=None) -> None:
         """Run a turn, delivering each event to ``emit`` as it happens.
 
         ``emit`` receives every agent/tool event live and a final
-        ``{"type": "done", "final": ...}`` event when the turn completes.
+        ``{"type": "done", "final": ...}`` event when the turn completes. Runs
+        under a per-conversation lock so independent chats stream concurrently.
         """
         with self._lock:
-            self._select_conv(conv_id)
             message = self._inline_files(self._preprocess(message), files)
-            self.ui.drain()
-            self.ui.sink = emit
+            agent, ui, conv_lock = self._agent_for_conv(conv_id)
+        with conv_lock:
+            ui.drain()
+            ui.sink = emit
             try:
-                final = self.agent.run(message, images=images)
+                final = agent.run(message, images=images)
             except ProviderError as exc:
                 emit({"type": "error", "text": str(exc)})
                 final = ""
             finally:
-                self.ui.sink = None
-            self._summaries[self._active_conv] = self.agent.summary
-            self._todos = self.agent.ctx.todos
-            self._accumulate_usage()
+                ui.sink = None
+            self._summaries[conv_id or "default"] = agent.summary
+            self._todos = agent.ctx.todos
+            self._accumulate_usage(agent)
             emit({"type": "done", "final": final, "usage": self.usage_info()})
 
-    def _accumulate_usage(self) -> None:
-        ru = getattr(self.agent, "run_usage", None) or {}
+    def _accumulate_usage(self, agent=None) -> None:
+        ru = getattr(agent or self.agent, "run_usage", None) or {}
         inp = ru.get("input_tokens", 0)
         out = ru.get("output_tokens", 0)
         reqs = ru.get("requests", 0)
@@ -502,6 +551,10 @@ class AgentService:
             return
         provider, model = self.config.provider, self.config.active.model
         cost, known = estimate_cost(model, inp, out)
+        with self._usage_lock:
+            self._accumulate_usage_locked(provider, reqs, inp, out, ru, cost, known)
+
+    def _accumulate_usage_locked(self, provider, reqs, inp, out, ru, cost, known) -> None:
         self.usage["requests"] += reqs
         self.usage["input_tokens"] += inp
         self.usage["output_tokens"] += out
@@ -550,6 +603,9 @@ class AgentService:
     def close_conversation(self, conv_id: str) -> dict[str, Any]:
         with self._lock:
             self.conversations.pop(conv_id, None)
+            self._conv_agents.pop(conv_id, None)
+            self._conv_locks.pop(conv_id, None)
+            self._summaries.pop(conv_id, None)
             if self._active_conv == conv_id:
                 self._active_conv = "default"
             return {"ok": True}
