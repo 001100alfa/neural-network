@@ -106,16 +106,18 @@ class SessionsMixin(ServiceBase):
 
     # -- export / import a conversation ----------------------------------
     def export_session(self, conv_id: str = "default", fmt: str = "md") -> dict[str, Any]:
+        from .redact import redact
+
         msgs = self.conversations.get(conv_id or "default", [])
         if fmt == "json":
-            content = json.dumps(
+            content = redact(json.dumps(
                 {
                     "provider": self.config.provider,
                     "model": self.config.active.model,
                     "messages": [_msg_to_dict(m) for m in msgs],
                 },
                 indent=2,
-            )
+            ))
             return {"filename": "conversation.json", "mime": "application/json", "content": content}
         # markdown
         lines = [f"# AIO conversation ({self.config.provider} / {self.config.active.model})", ""]
@@ -135,7 +137,8 @@ class SessionsMixin(ServiceBase):
             elif m.role == "tool":
                 body = (m.content or "")[:1000]
                 lines += ["> **tool result:**", "", "```", body, "```", ""]
-        return {"filename": "conversation.md", "mime": "text/markdown", "content": "\n".join(lines)}
+        return {"filename": "conversation.md", "mime": "text/markdown",
+                "content": redact("\n".join(lines))}
 
     def import_session(self, data: Any, conv_id: str | None = None) -> dict[str, Any]:
         import time

@@ -43,6 +43,8 @@ class ToolContext:
     code_index: Any = None
     # lazily-built BM25 code searcher for search_code
     code_searcher: Any = None
+    # optional audit sink: callable(name, args, status, detail) for tool runs
+    audit: Any = None
     # when True, edits are approved hunk-by-hunk via ui.confirm_hunk (#9)
     per_hunk: bool = False
 

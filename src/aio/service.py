@@ -158,6 +158,9 @@ class AgentService(SessionsMixin, ProvidersMixin, PanelsMixin):
 
         self.gated = bool(gated)
         self._approvals = ApprovalBroker()
+        from .obs import AuditLog
+
+        self._audit_log = AuditLog(self._sessions_dir() / "audit.jsonl")
         self.ui = EventUI(self._approvals)
         self._lock = threading.Lock()
         self._usage_lock = threading.Lock()  # guards self.usage across concurrent chats
@@ -214,6 +217,7 @@ class AgentService(SessionsMixin, ProvidersMixin, PanelsMixin):
             checkpoints=self._checkpoints,
             todos=self._todos,
             permissions=dict(self.config.permissions),
+            audit=self._audit_log.record,
         )
         registry = default_registry()
         for tool in self._mcp_tools:

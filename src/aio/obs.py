@@ -60,9 +60,36 @@ class Metrics:
         return "\n".join(lines) + "\n"
 
 
+class AuditLog:
+    """Append-only, secret-redacted record of tool executions (JSON lines)."""
+
+    def __init__(self, path) -> None:
+        from pathlib import Path
+
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
+
+    def record(self, name: str, args: dict, status: str, detail: str = "") -> None:
+        from .redact import redact_obj
+
+        entry = {
+            "ts": round(time.time(), 3), "tool": name, "status": status,
+            "args": redact_obj(args), "detail": redact_obj(detail),
+        }
+        line = json.dumps(entry, default=str) + "\n"
+        try:
+            with self._lock, open(self.path, "a", encoding="utf-8") as fh:
+                fh.write(line)
+        except OSError:  # pragma: no cover - disk full / perms
+            pass
+
+
 def log_event(level: str = "info", **fields) -> None:
-    """Emit one structured JSON log line to stderr."""
-    record = {"ts": round(time.time(), 3), "level": level, **fields}
+    """Emit one structured JSON log line to stderr (secrets redacted)."""
+    from .redact import redact_obj
+
+    record = {"ts": round(time.time(), 3), "level": level, **redact_obj(fields)}
     try:
         sys.stderr.write(json.dumps(record, default=str) + "\n")
         sys.stderr.flush()

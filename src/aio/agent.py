@@ -40,6 +40,8 @@ class Agent:
         hooks=None,
         auto_context: bool = False,
         auto_context_k: int = 5,
+        max_tool_calls: int = 0,
+        deadline_s: float = 0.0,
     ) -> None:
         self.provider = provider
         self.tools = tools
@@ -62,6 +64,9 @@ class Agent:
         self.auto_context = auto_context
         self.auto_context_k = auto_context_k
         self._auto_context = ""        # transient retrieved block for the current turn
+        #: backpressure: cap tool calls / wall-clock per run() (0 = unlimited)
+        self.max_tool_calls = int(max_tool_calls)
+        self.deadline_s = float(deadline_s)
         self.messages: list[Message] = []
         #: running summary of compacted (older) messages, fed via the system prompt
         self.summary: str = ""
@@ -245,12 +250,16 @@ class Agent:
     def run(self, user_input: str, images: list[dict] | None = None) -> str:
         """Run one user turn to completion; returns the final assistant text."""
 
+        import time as _time
+
         self.messages.append(Message(role="user", content=user_input, images=images or []))
         self.run_usage = {"requests": 0, "input_tokens": 0, "output_tokens": 0,
                           "cache_read": 0, "cache_write": 0}
         self._retrieve_context(user_input)
         self._maybe_compact()
         final_text = ""
+        started = _time.time()
+        tool_calls_made = 0
 
         use_stream = (
             self.stream and hasattr(self.ui, "token") and hasattr(self.provider, "stream_chat")
@@ -290,7 +299,15 @@ class Agent:
                 return final_text
 
             for call in turn.tool_calls:
+                # backpressure: stop cleanly if a budget is set and exceeded
+                if self.max_tool_calls and tool_calls_made >= self.max_tool_calls:
+                    self.ui.warn(f"tool-call budget reached ({self.max_tool_calls}); stopping.")
+                    return final_text
+                if self.deadline_s and (_time.time() - started) > self.deadline_s:
+                    self.ui.warn(f"time budget reached ({self.deadline_s:.0f}s); stopping.")
+                    return final_text
                 result = self._execute(call)
+                tool_calls_made += 1
                 self.messages.append(
                     Message(role="tool", content=result, tool_call_id=call.id, name=call.name)
                 )
@@ -307,6 +324,17 @@ class Agent:
         if self.plan_mode and call.name not in READONLY_TOOLS:
             self.ui.tool_result(f"blocked in plan mode: {call.name}", error=True)
             return "Error: plan mode is read-only; this tool is disabled. Present a plan instead."
+
+        # Argument-scoped guardrail: refuse catastrophic shell commands outright,
+        # even with approval/auto-approve (last line of defence).
+        if call.name in ("run_shell", "run_background"):
+            from .guard import dangerous_command
+
+            reason = dangerous_command(call.arguments.get("command", ""))
+            if reason:
+                self.ui.tool_result(f"blocked by safety guardrail: {reason}", error=True)
+                self._audit(call.name, call.arguments, "blocked", reason)
+                return f"Error: refused — {reason}. This command is blocked by the safety guardrail."
 
         # Granular permissions (#7): explicit deny/allow rules override the
         # default approval flow.
@@ -340,9 +368,11 @@ class Agent:
             result = tool.run(call.arguments, self.ctx)
         except ToolError as exc:
             self.ui.tool_result(str(exc), error=True)
+            self._audit(call.name, call.arguments, "error", str(exc))
             return f"Error: {exc}"
         except Exception as exc:  # pragma: no cover - defensive
             self.ui.tool_result(f"{type(exc).__name__}: {exc}", error=True)
+            self._audit(call.name, call.arguments, "error", f"{type(exc).__name__}: {exc}")
             return f"Error: {type(exc).__name__}: {exc}"
 
         # PostToolUse hooks (#6) — observe the result (cannot block).
@@ -352,4 +382,15 @@ class Agent:
                 self.ui.info(line) if hasattr(self.ui, "info") else None
 
         self.ui.tool_result(result)
+        self._audit(call.name, call.arguments, "ok")
         return result
+
+    def _audit(self, name: str, args: dict, status: str, detail: str = "") -> None:
+        """Record a tool execution to the optional append-only audit log."""
+        audit = getattr(self.ctx, "audit", None)
+        if audit is None:
+            return
+        try:
+            audit(name=name, args=args, status=status, detail=detail)
+        except Exception:  # pragma: no cover - audit must never break a turn
+            pass
